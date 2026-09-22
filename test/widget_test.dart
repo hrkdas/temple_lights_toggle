@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:temple_lights_toggle/contract/light_contract.dart';
 import 'package:temple_lights_toggle/domain/models.dart';
+import 'package:temple_lights_toggle/ui/widgets/light_dial_button.dart';
 
 void main() {
   group('Temple Lights BLE Contract & Encoder Tests', () {
@@ -335,6 +337,83 @@ void main() {
 
       const offState = LightState(isOn: false, brightness: 0);
       expect(offState.isOff, isTrue);
+    });
+  });
+
+  group('LightDialButton Widget Tests', () {
+    testWidgets('Renders outline containers and texts properly when lights are ON', (tester) async {
+      var toggled = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LightDialButton(
+              isOn: true,
+              mode: 0,
+              brightness: 255,
+              r: 255,
+              g: 147,
+              b: 41,
+              isEnabled: true,
+              onToggle: () => toggled = true,
+            ),
+          ),
+        ),
+      );
+
+      // Verify 'LIGHTS ON' and subtitle texts are present and visible
+      expect(find.text('LIGHTS ON'), findsOneWidget);
+      expect(find.text('MODE 1 • ALL 2.5M WARM'), findsOneWidget);
+
+      // Tap to toggle
+      await tester.tap(find.byType(LightDialButton));
+      expect(toggled, isTrue);
+    });
+
+    testWidgets('Renders outline containers and standby texts when lights are OFF', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LightDialButton(
+              isOn: false,
+              mode: 0,
+              brightness: 0,
+              r: 255,
+              g: 147,
+              b: 41,
+              isEnabled: true,
+              onToggle: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('LIGHTS OFF'), findsOneWidget);
+      expect(find.text('TAP TO TURN ON'), findsOneWidget);
+    });
+
+    testWidgets('Maintains high-contrast obsidian text when Custom RGB is Pure White', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LightDialButton(
+              isOn: true,
+              mode: 3,
+              brightness: 255,
+              r: 255,
+              g: 255,
+              b: 255,
+              isEnabled: true,
+              onToggle: () {},
+            ),
+          ),
+        ),
+      );
+
+      final textFinder = find.text('LIGHTS ON');
+      expect(textFinder, findsOneWidget);
+      final textWidget = tester.widget<Text>(textFinder);
+      // Ensure text is not white (luminance < 0.1 so it contrasts with white porcelain)
+      expect(textWidget.style?.color, const Color(0xFF1C1917));
     });
   });
 }

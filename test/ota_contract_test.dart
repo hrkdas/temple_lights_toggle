@@ -1,12 +1,14 @@
 import 'dart:convert';
+import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:temple_lights_toggle/contract/light_contract.dart';
+import 'package:temple_lights_toggle/contract/ota_constants.dart';
 import 'package:temple_lights_toggle/domain/models.dart';
 
 void main() {
   group('Temple Lights OTA Contract & Packet Encoder Tests', () {
     test('LightBleUuids exposes default OTA characteristic UUID', () {
-      expect(LightBleUuids.defaultOtaChar, 'a1b2c3d4-e5f6-7890-abcd-ef1234567892');
+      expect(LightBleUuids.defaultOtaChar, '0ddad461-e5e3-457b-a173-da66bd52bf4e');
     });
 
     test('encodeOtaBegin serializes size and md5 into valid JSON payload', () {
@@ -94,6 +96,118 @@ void main() {
       expect(const OtaProgressState(phase: OtaPhase.completed).isInProgress, isFalse);
       expect(const OtaProgressState(phase: OtaPhase.failed).isInProgress, isFalse);
       expect(const OtaProgressState(phase: OtaPhase.canceled).isInProgress, isFalse);
+    });
+  });
+
+  group('Temple Lights OTA Service & Characteristic Matching Tests', () {
+    test('LightBleUuids defines dedicated OTA service and characteristic UUIDs', () {
+      expect(LightBleUuids.defaultService, '95d6fedc-cac3-48e2-8221-f534a2782704');
+      expect(LightBleUuids.defaultControlChar, '0ddad461-e5e3-457b-a173-da66bd52bf4d');
+      expect(LightBleUuids.defaultOtaService, '95d6fedc-cac3-48e2-8221-f534a2782710');
+      expect(LightBleUuids.defaultOtaControlChar, '0ddad461-e5e3-457b-a173-da66bd52bf4e');
+      expect(LightBleUuids.defaultOtaDataChar, '0ddad461-e5e3-457b-a173-da66bd52bf4f');
+      expect(LightBleUuids.defaultOtaStatusChar, '0ddad461-e5e3-457b-a173-da66bd52bf50');
+      expect(LightBleUuids.defaultOtaChar, LightBleUuids.defaultOtaControlChar);
+      expect(LightBleUuids.knownServices, contains(LightBleUuids.defaultService));
+      expect(LightBleUuids.knownServices, contains(LightBleUuids.defaultOtaService));
+      expect(LightBleUuids.knownServices, contains(LightBleUuids.legacyService));
+      expect(LightBleUuids.knownServices.length, 3);
+    });
+
+    test('resolveOtaUuids matches dedicated hardware Temple Lights OTA service', () {
+      final services = [
+        DiscoveredServiceSummary(
+          serviceId: OtaConstants.primaryServiceUuid,
+          characteristicIds: [Uuid.parse(LightBleUuids.defaultControlChar)],
+        ),
+        DiscoveredServiceSummary(
+          serviceId: OtaConstants.primaryOtaServiceUuid,
+          characteristicIds: [
+            OtaConstants.primaryOtaControlUuid,
+            OtaConstants.primaryOtaDataUuid,
+            OtaConstants.primaryOtaStatusUuid,
+          ],
+        ),
+      ];
+
+      final resolved = OtaConstants.resolveOtaUuids(discoveredServices: services);
+      expect(resolved, isNotNull);
+      expect(resolved!.serviceUuid, OtaConstants.primaryOtaServiceUuid);
+      expect(resolved.controlUuid, OtaConstants.primaryOtaControlUuid);
+      expect(resolved.dataUuid, OtaConstants.primaryOtaDataUuid);
+      expect(resolved.statusUuid, OtaConstants.primaryOtaStatusUuid);
+      expect(resolved.sourceDescription, contains('Matched Dedicated OTA Service'));
+    });
+
+    test('resolveOtaUuids matches primary lighting service when characteristics are under it', () {
+      final services = [
+        DiscoveredServiceSummary(
+          serviceId: OtaConstants.primaryServiceUuid,
+          characteristicIds: [
+            Uuid.parse(LightBleUuids.defaultControlChar),
+            OtaConstants.primaryOtaControlUuid,
+            OtaConstants.primaryOtaDataUuid,
+            OtaConstants.primaryOtaStatusUuid,
+          ],
+        ),
+      ];
+
+      final resolved = OtaConstants.resolveOtaUuids(
+        discoveredServices: services,
+        preferredServiceUuid: OtaConstants.primaryServiceUuid.toString(),
+      );
+      expect(resolved, isNotNull);
+      expect(resolved!.serviceUuid, OtaConstants.primaryServiceUuid);
+      expect(resolved.controlUuid, OtaConstants.primaryOtaControlUuid);
+      expect(resolved.dataUuid, OtaConstants.primaryOtaDataUuid);
+      expect(resolved.statusUuid, OtaConstants.primaryOtaStatusUuid);
+      expect(resolved.sourceDescription, contains('Matched Preferred Service'));
+    });
+
+    test('resolveOtaUuids matches legacy Temple Lights service characteristics', () {
+      final services = [
+        DiscoveredServiceSummary(
+          serviceId: OtaConstants.legacyServiceUuid,
+          characteristicIds: [
+            Uuid.parse(LightBleUuids.legacyControlChar),
+            OtaConstants.legacyOtaControlUuid,
+            OtaConstants.legacyOtaDataUuid,
+            OtaConstants.legacyOtaStatusUuid,
+          ],
+        ),
+      ];
+
+      final resolved = OtaConstants.resolveOtaUuids(discoveredServices: services);
+      expect(resolved, isNotNull);
+      expect(resolved!.serviceUuid, OtaConstants.legacyServiceUuid);
+      expect(resolved.controlUuid, OtaConstants.legacyOtaControlUuid);
+      expect(resolved.dataUuid, OtaConstants.legacyOtaDataUuid);
+      expect(resolved.statusUuid, OtaConstants.legacyOtaStatusUuid);
+      expect(resolved.sourceDescription, contains('Matched Legacy Service'));
+    });
+
+    test('resolveOtaUuids returns null when device only has lighting characteristic and no OTA service', () {
+      final services = [
+        DiscoveredServiceSummary(
+          serviceId: OtaConstants.primaryServiceUuid,
+          characteristicIds: [Uuid.parse(LightBleUuids.defaultControlChar)],
+        ),
+      ];
+
+      final resolved = OtaConstants.resolveOtaUuids(discoveredServices: services);
+      expect(resolved, isNull);
+    });
+
+    test('resolveOtaUuids returns null when foreign unknown service is discovered', () {
+      final services = [
+        DiscoveredServiceSummary(
+          serviceId: Uuid.parse('12345678-1234-1234-1234-123456789abc'),
+          characteristicIds: [Uuid.parse('12345678-1234-1234-1234-123456789abd')],
+        ),
+      ];
+
+      final resolved = OtaConstants.resolveOtaUuids(discoveredServices: services);
+      expect(resolved, isNull);
     });
   });
 }

@@ -4,15 +4,40 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 class OtaConstants {
   OtaConstants._();
 
-  // Dedicated Boturo Go OTA GATT UUIDs
-  static final Uuid otaServiceUuid =
-      Uuid.parse('f71a0001-2c98-4a7b-a7f9-5e8fbc2d0100');
-  static final Uuid otaControlCharacteristicUuid =
-      Uuid.parse('f71a0002-2c98-4a7b-a7f9-5e8fbc2d0100');
-  static final Uuid otaDataCharacteristicUuid =
-      Uuid.parse('f71a0003-2c98-4a7b-a7f9-5e8fbc2d0100');
-  static final Uuid otaStatusCharacteristicUuid =
-      Uuid.parse('f71a0004-2c98-4a7b-a7f9-5e8fbc2d0100');
+  // Primary Hardware-Matched High-Speed OTA UUIDs
+  // Dedicated OTA Service: 95d6fedc-cac3-48e2-8221-f534a2782710
+  // Primary Lighting Service: 95d6fedc-cac3-48e2-8221-f534a2782704
+  static final Uuid primaryOtaServiceUuid =
+      Uuid.parse('95d6fedc-cac3-48e2-8221-f534a2782710');
+  static final Uuid primaryServiceUuid =
+      Uuid.parse('95d6fedc-cac3-48e2-8221-f534a2782704');
+  static final Uuid primaryOtaControlUuid =
+      Uuid.parse('0ddad461-e5e3-457b-a173-da66bd52bf4e');
+  static final Uuid primaryOtaDataUuid =
+      Uuid.parse('0ddad461-e5e3-457b-a173-da66bd52bf4f');
+  static final Uuid primaryOtaStatusUuid =
+      Uuid.parse('0ddad461-e5e3-457b-a173-da66bd52bf50');
+
+  // Legacy Temple Lights High-Speed OTA UUIDs (under a1b2c3d4-e5f6-7890-abcd-ef1234567890)
+  static final Uuid legacyServiceUuid =
+      Uuid.parse('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+  static final Uuid legacyOtaControlUuid =
+      Uuid.parse('a1b2c3d4-e5f6-7890-abcd-ef1234567892');
+  static final Uuid legacyOtaDataUuid =
+      Uuid.parse('a1b2c3d4-e5f6-7890-abcd-ef1234567893');
+  static final Uuid legacyOtaStatusUuid =
+      Uuid.parse('a1b2c3d4-e5f6-7890-abcd-ef1234567894');
+
+  // Active default getters
+  static Uuid get templeLightsServiceUuid => primaryOtaServiceUuid;
+  static Uuid get templeLightsOtaControlUuid => primaryOtaControlUuid;
+  static Uuid get templeLightsOtaDataUuid => primaryOtaDataUuid;
+  static Uuid get templeLightsOtaStatusUuid => primaryOtaStatusUuid;
+
+  static Uuid get otaServiceUuid => primaryOtaServiceUuid;
+  static Uuid get otaControlCharacteristicUuid => primaryOtaControlUuid;
+  static Uuid get otaDataCharacteristicUuid => primaryOtaDataUuid;
+  static Uuid get otaStatusCharacteristicUuid => primaryOtaStatusUuid;
 
   static const int targetMtu = 517;
   static const int fallbackMtu = 247;
@@ -62,4 +87,195 @@ class OtaConstants {
   }
 
   static Uint8List makeEndFrame() => Uint8List.fromList(<int>[opEndOta]);
+
+  /// Dynamically resolves and matches the OTA Service and Characteristic UUIDs
+  /// based on the discovered services from the connected hardware.
+  static ResolvedOtaUuids? resolveOtaUuids({
+    required Iterable<dynamic> discoveredServices,
+    String? preferredServiceUuid,
+  }) {
+    final summaries = <DiscoveredServiceSummary>[];
+    for (final s in discoveredServices) {
+      if (s is DiscoveredServiceSummary) {
+        summaries.add(s);
+      } else if (s is Service) {
+        summaries.add(
+          DiscoveredServiceSummary(
+            serviceId: s.id,
+            characteristicIds: s.characteristics.map((c) => c.id).toList(),
+          ),
+        );
+      } else if (s is DiscoveredService) {
+        summaries.add(
+          DiscoveredServiceSummary(
+            serviceId: s.serviceId,
+            characteristicIds: s.characteristicIds,
+          ),
+        );
+      }
+    }
+
+    final targetServiceStr =
+        (preferredServiceUuid ?? primaryOtaServiceUuid.toString()).toLowerCase();
+
+    // 1. Check for dedicated OTA service (95d6fedc-cac3-48e2-8221-f534a2782710)
+    for (final s in summaries) {
+      if (s.serviceId.toString().toLowerCase() ==
+          primaryOtaServiceUuid.toString().toLowerCase()) {
+        final charMap = {
+          for (final c in s.characteristicIds) c.toString().toLowerCase(): c
+        };
+        final cControl =
+            charMap[primaryOtaControlUuid.toString().toLowerCase()] ??
+            primaryOtaControlUuid;
+        final cData =
+            charMap[primaryOtaDataUuid.toString().toLowerCase()] ??
+            primaryOtaDataUuid;
+        final cStatus =
+            charMap[primaryOtaStatusUuid.toString().toLowerCase()] ??
+            primaryOtaStatusUuid;
+
+        return ResolvedOtaUuids(
+          serviceUuid: s.serviceId,
+          controlUuid: cControl,
+          dataUuid: cData,
+          statusUuid: cStatus,
+          sourceDescription: 'Matched Dedicated OTA Service (${s.serviceId})',
+        );
+      }
+    }
+
+    // 2. Check preferred service match with primary OTA characteristics
+    for (final s in summaries) {
+      if (s.serviceId.toString().toLowerCase() == targetServiceStr) {
+        final charMap = {
+          for (final c in s.characteristicIds) c.toString().toLowerCase(): c
+        };
+
+        // Check primary characteristics
+        final cControl =
+            charMap[primaryOtaControlUuid.toString().toLowerCase()];
+        final cData = charMap[primaryOtaDataUuid.toString().toLowerCase()];
+        final cStatus = charMap[primaryOtaStatusUuid.toString().toLowerCase()];
+        if (cControl != null && cData != null) {
+          return ResolvedOtaUuids(
+            serviceUuid: s.serviceId,
+            controlUuid: cControl,
+            dataUuid: cData,
+            statusUuid: cStatus ?? cControl,
+            sourceDescription: 'Matched Preferred Service (${s.serviceId})',
+          );
+        }
+
+        // Check legacy characteristics under preferred service
+        final cLegControl =
+            charMap[legacyOtaControlUuid.toString().toLowerCase()];
+        final cLegData = charMap[legacyOtaDataUuid.toString().toLowerCase()];
+        final cLegStatus =
+            charMap[legacyOtaStatusUuid.toString().toLowerCase()];
+        if (cLegControl != null && cLegData != null) {
+          return ResolvedOtaUuids(
+            serviceUuid: s.serviceId,
+            controlUuid: cLegControl,
+            dataUuid: cLegData,
+            statusUuid: cLegStatus ?? cLegControl,
+            sourceDescription:
+                'Matched Preferred Service with Legacy OTA (${s.serviceId})',
+          );
+        }
+      }
+    }
+
+    // 3. Check legacy service (a1b2c3d4-e5f6-7890-abcd-ef1234567890)
+    for (final s in summaries) {
+      if (s.serviceId.toString().toLowerCase() ==
+          legacyServiceUuid.toString().toLowerCase()) {
+        final charMap = {
+          for (final c in s.characteristicIds) c.toString().toLowerCase(): c
+        };
+        final cControl =
+            charMap[legacyOtaControlUuid.toString().toLowerCase()];
+        final cData = charMap[legacyOtaDataUuid.toString().toLowerCase()];
+        final cStatus =
+            charMap[legacyOtaStatusUuid.toString().toLowerCase()];
+        if (cControl != null && cData != null) {
+          return ResolvedOtaUuids(
+            serviceUuid: s.serviceId,
+            controlUuid: cControl,
+            dataUuid: cData,
+            statusUuid: cStatus ?? cControl,
+            sourceDescription: 'Matched Legacy Service (${s.serviceId})',
+          );
+        }
+      }
+    }
+
+    // 4. Search all discovered services for presence of either OTA characteristic set
+    for (final s in summaries) {
+      final charMap = {
+        for (final c in s.characteristicIds) c.toString().toLowerCase(): c
+      };
+
+      // Check primary set
+      final cControl =
+          charMap[primaryOtaControlUuid.toString().toLowerCase()];
+      final cData = charMap[primaryOtaDataUuid.toString().toLowerCase()];
+      final cStatus = charMap[primaryOtaStatusUuid.toString().toLowerCase()];
+      if (cControl != null && cData != null) {
+        return ResolvedOtaUuids(
+          serviceUuid: s.serviceId,
+          controlUuid: cControl,
+          dataUuid: cData,
+          statusUuid: cStatus ?? cControl,
+          sourceDescription:
+              'Discovered Service with Primary OTA (${s.serviceId})',
+        );
+      }
+
+      // Check legacy set
+      final cLegControl =
+          charMap[legacyOtaControlUuid.toString().toLowerCase()];
+      final cLegData = charMap[legacyOtaDataUuid.toString().toLowerCase()];
+      final cLegStatus =
+          charMap[legacyOtaStatusUuid.toString().toLowerCase()];
+      if (cLegControl != null && cLegData != null) {
+        return ResolvedOtaUuids(
+          serviceUuid: s.serviceId,
+          controlUuid: cLegControl,
+          dataUuid: cLegData,
+          statusUuid: cLegStatus ?? cLegControl,
+          sourceDescription:
+              'Discovered Service with Legacy OTA (${s.serviceId})',
+        );
+      }
+    }
+
+    return null;
+  }
+}
+
+class DiscoveredServiceSummary {
+  const DiscoveredServiceSummary({
+    required this.serviceId,
+    required this.characteristicIds,
+  });
+
+  final Uuid serviceId;
+  final List<Uuid> characteristicIds;
+}
+
+class ResolvedOtaUuids {
+  const ResolvedOtaUuids({
+    required this.serviceUuid,
+    required this.controlUuid,
+    required this.dataUuid,
+    required this.statusUuid,
+    required this.sourceDescription,
+  });
+
+  final Uuid serviceUuid;
+  final Uuid controlUuid;
+  final Uuid dataUuid;
+  final Uuid statusUuid;
+  final String sourceDescription;
 }

@@ -111,31 +111,35 @@ $$\text{Right Margin} = 30\,\text{LEDs (indices } 120 \text{ to } 149\text{)}$$
 
 ## 4. Lighting Modes & Autonomous Power-Cycle Boot Logic
 
-### 4.1 Mode Definitions
-- **Mode 0 (All Warm White)**:
-  - Color: Warm White $\to$ $R=255, G=147, B=41$
-  - Range: All LEDs ($0 \le i < NUM\_LEDS$)
-  - Default Brightness: 100% (255)
-- **Mode 1 (Center Warm White)**:
-  - Color: Warm White $\to$ $R=255, G=147, B=41$
-  - Range: Middle 90 LEDs ($30 \le i \le 119$)
-  - Outer Margins: $0 \le i < 30$ and $120 \le i < 150$ are turned **OFF** ($R=0, G=0, B=0$)
-  - Default Brightness: 100% (255)
-- **Mode 2 (All Pure White)**:
-  - Color: Pure White $\to$ $R=255, G=255, B=255$
-  - Range: All LEDs ($0 \le i < NUM\_LEDS$)
-  - Default Brightness: 100% (255)
-- **Mode 3 (Custom RGB)**:
+### 4.1 Editable Default Boot Modes (Persisted in NVS `"tl_modes"`)
+All 3 default boot modes are fully editable from the dedicated **Modes** tab, saved into the ESP32's NVS flash, and loaded on boot:
+
+- **Mode 0 (Default: All Warm White)**:
+  - Default Name: `"Warm White"`
+  - Default Color: Warm White $\to$ $R=255, G=147, B=41$
+  - Default Style: `0` (Full Strip, all $150$ LEDs)
+  - Configurable Brightness: $1 \dots 255$ (Default: $255$ / 100%)
+- **Mode 1 (Default: Center Warm White)**:
+  - Default Name: `"Center Warm"`
+  - Default Color: Warm White $\to$ $R=255, G=147, B=41$
+  - Default Style: `1` (Center Focus 1.5m, middle $90$ LEDs $30 \le i \le 119$; outer $60$ LEDs turned **OFF**)
+  - Configurable Brightness: $1 \dots 255$ (Default: $255$ / 100%)
+- **Mode 2 (Default: All Pure White)**:
+  - Default Name: `"Pure White"`
+  - Default Color: Pure White $\to$ $R=255, G=255, B=255$
+  - Default Style: `0` (Full Strip, all $150$ LEDs)
+  - Configurable Brightness: $1 \dots 255$ (Default: $255$ / 100%)
+- **Mode 3 (Custom RGB & App Live Color)**:
   - Color: Arbitrary user-defined 24-bit RGB $(R, G, B)$
-  - Range: All LEDs
+  - Range: All LEDs (2.5m)
   - Brightness: Controllable 0–100% via BLE
 - **Power State OFF (`is_on = false` or `brightness = 0`)**:
   - All LEDs cleared to black ($R=0, G=0, B=0$)
-  - Preserves prior mode & color in memory for seamless re-powering.
+  - Preserves prior mode, brightness, & color in NVS for seamless re-powering.
 
-### 4.2 Power-Cycle Boot Mode Advancing
+### 4.2 Power-Cycle Boot Mode Advancing & Hardware Cycle Sync
 To satisfy the battery/wall disconnect-and-reconnect cycle requirement:
-1. At boot, the ESP32 inspects `currentMode` persisted in NVS:
+1. At boot, the ESP32 loads `defaultModes[3]` from `"tl_modes"` and `currentMode` from `"tl"` in NVS:
    ```cpp
    uint8_t lastMode = currentMode;
    if (lastMode >= 2) {
@@ -143,11 +147,15 @@ To satisfy the battery/wall disconnect-and-reconnect cycle requirement:
    } else {
        currentMode = lastMode + 1;
    }
-   brightness = 255;
+   brightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
+   targetBrightness = brightness;
+   activeBrightness = brightness;
+   currentBrightness = (float)brightness;
    save_state();
    ```
-2. Cycles deterministically: $0 \to 1 \to 2 \to 0$.
-3. Requires zero Wi-Fi, Bluetooth, or cloud connection.
+2. Cycles deterministically: $0 \to 1 \to 2 \to 0$, automatically adopting the custom color, zone style, and brightness configured for that mode.
+3. Hardware toggle `{"cmd":"next_mode"}` advances $(currentMode + 1) \bmod 3$ with smooth crossfade and brightness slew.
+4. Requires zero Wi-Fi, Bluetooth, or cloud connection to operate autonomously.
 
 ---
 
@@ -162,6 +170,7 @@ Config: [`/Users/hrk/Documents/PlatformIO/Projects/esp_rgb_strip_temple/platform
 - **LED Driver**: `Adafruit NeoPixel` v1.10.7 configured for `NEO_GRB + NEO_KHZ800`.
 - **NVS Namespaces**:
   - `"tl"`: Operational state (mode, brightness, custom RGB).
+  - `"tl_modes"`: Editable 3 default boot modes (name, RGB, style, brightness).
   - `"tl_sched"`: Autonomous schedule entries (up to 16 schedules).
   - `"tl_logs"`: Circular buffer of device activity logs (up to 20 entries).
 
@@ -212,9 +221,16 @@ lib_deps =
 ## 7. BLE Protocol, Wire Contract & Command Dictionary
 
 ### 7.1 GATT Service & Characteristic Specifications
-- **Service UUID**: `a1b2c3d4-e5f6-7890-abcd-ef1234567890`
-- **Control Characteristic UUID**: `a1b2c3d4-e5f6-7890-abcd-ef1234567891` (`READ | WRITE | WRITE_WITHOUT_RESPONSE | NOTIFY`)
-- **OTA Data Characteristic UUID**: `a1b2c3d4-e5f6-7890-abcd-ef1234567892` (`READ | WRITE | WRITE_WITHOUT_RESPONSE | NOTIFY`)
+- **Hardware Primary Service UUID**: `95d6fedc-cac3-48e2-8221-f534a2782704` (Hardware Aligned Primary & High-Speed OTA)
+  - **Light Control Characteristic UUID**: `0ddad461-e5e3-457b-a173-da66bd52bf4d` (`READ | WRITE | WRITE_WITHOUT_RESPONSE | NOTIFY`)
+  - **OTA Control Characteristic UUID**: `0ddad461-e5e3-457b-a173-da66bd52bf4e` (`WRITE | WRITE_WITHOUT_RESPONSE`)
+  - **OTA Data Characteristic UUID**: `0ddad461-e5e3-457b-a173-da66bd52bf4f` (`WRITE_WITHOUT_RESPONSE`)
+  - **OTA Status Characteristic UUID**: `0ddad461-e5e3-457b-a173-da66bd52bf50` (`READ | NOTIFY`)
+- **Legacy Service UUID**: `a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+  - **Legacy Control**: `a1b2c3d4-e5f6-7890-abcd-ef1234567891`
+  - **Legacy OTA Control**: `a1b2c3d4-e5f6-7890-abcd-ef1234567892`
+  - **Legacy OTA Data**: `a1b2c3d4-e5f6-7890-abcd-ef1234567893`
+  - **Legacy OTA Status**: `a1b2c3d4-e5f6-7890-abcd-ef1234567894`
 
 ### 7.2 Telemetry Notification Formats
 
@@ -268,12 +284,15 @@ $$\text{Byte 4: Blue} \quad (0 \text{ to } 255)$$
 | **Toggle Sched** | `{"cmd":"toggle_sched","id":"sc1","en":false}`| Toggles schedule active state in NVS. |
 | **Delete Sched** | `{"cmd":"del_sched","id":"sc1"}` | Deletes schedule from NVS. |
 | **Get Schedules**| `{"cmd":"get_scheds"}` | Hydrates app with all saved schedules. |
-| **Get Logs** | `{"cmd":"get_logs"}` | Hydrates app with stored activity logs. |
-| **Clear Logs** | `{"cmd":"clear_logs"}` | Clears all activity logs in NVS. |
-| **OTA Begin** | `{"cmd":"ota_begin","size":642161,"md5":"..."}` | Initializes flash partition, sets MD5, prepares ESP32. |
-| **OTA Chunk** | Binary byte array (256B) on `OTA_CHAR_UUID` | Streams raw firmware chunks via `Update.write()`. |
-| **OTA End** | `{"cmd":"ota_end"}` | Verifies checksum, marks partition bootable, reboots ESP32. |
-| **OTA Abort** | `{"cmd":"ota_abort"}` | Cancels update, rolls back flash, leaves current partition intact. |
+| **Get Modes**    | `{"cmd":"get_modes"}` | Hydrates app with 3 default modes (`mode_cfg` + `modes_end`). |
+| **Save Mode**    | `{"cmd":"save_mode","idx":0,...}` | Commits customized mode (name, RGB, style, brightness) to `"tl_modes"`. |
+| **Reset Modes**  | `{"cmd":"reset_modes"}` | Restores factory default modes in NVS and updates LEDs. |
+| **Get Logs**     | `{"cmd":"get_logs"}` | Hydrates app with stored activity logs. |
+| **Clear Logs**   | `{"cmd":"clear_logs"}` | Clears all activity logs in NVS. |
+| **OTA Begin**    | `{"cmd":"ota_begin","size":642161,"md5":"..."}` | Initializes flash partition, sets MD5, prepares ESP32. |
+| **OTA Chunk**    | Binary byte array (256B) on `OTA_CHAR_UUID` | Streams raw firmware chunks via `Update.write()`. |
+| **OTA End**      | `{"cmd":"ota_end"}` | Verifies checksum, marks partition bootable, reboots ESP32. |
+| **OTA Abort**    | `{"cmd":"ota_abort"}` | Cancels update, rolls back flash, leaves current partition intact. |
 
 ---
 
@@ -312,10 +331,12 @@ lib/
 └── features/
     ├── home/
     │   └── lights_screen.dart              # Main lighting control dashboard
+    ├── modes/
+    │   └── modes_screen.dart               # Dedicated 3 Default Boot Modes editor & visualizer
     ├── ota/
     │   └── ota_update_screen.dart          # Animated Serene Luxury Light OTA update screen
     ├── schedule/
-    │   ├── schedule_screen.dart            # Autonomous schedule manager
+    │   ├── schedule_screen.dart            # Autonomous schedule manager (with Mode/RGB/Bright)
     │   └── schedule_editor_sheet.dart      # Schedule creation/editing modal
     ├── logs/
     │   └── logs_screen.dart                # Flash activity logs inspector
@@ -324,7 +345,7 @@ lib/
     ├── settings/
     │   └── settings_sheet.dart             # Settings, OTA updater tile & UUID overrides
     └── shell/
-        └── main_nav_shell.dart             # 3-tab persistent navigation shell
+        └── main_nav_shell.dart             # 4-tab persistent navigation shell (Lights, Modes, Sched, Logs)
 ```
 
 ---

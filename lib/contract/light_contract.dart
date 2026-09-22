@@ -3,17 +3,46 @@ import 'dart:typed_data';
 
 class LightBleUuids {
   LightBleUuids._();
-  static const String defaultService = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-  static const String defaultControlChar = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
-  static const String defaultOtaChar = 'a1b2c3d4-e5f6-7890-abcd-ef1234567892';
-  static const List<String> knownServices = [defaultService];
+
+  // Primary Service & Characteristic UUIDs (Aligned to hardware 95d6fedc-cac3-48e2-8221-f534a2782704)
+  static const String defaultService = '95d6fedc-cac3-48e2-8221-f534a2782704';
+  static const String defaultControlChar = '0ddad461-e5e3-457b-a173-da66bd52bf4d';
+
+  // Dedicated High-Speed OTA Service & Characteristic UUIDs (Aligned to hardware 95d6fedc-cac3-48e2-8221-f534a2782710)
+  static const String defaultOtaService = '95d6fedc-cac3-48e2-8221-f534a2782710';
+  static const String defaultOtaControlChar = '0ddad461-e5e3-457b-a173-da66bd52bf4e';
+  static const String defaultOtaDataChar = '0ddad461-e5e3-457b-a173-da66bd52bf4f';
+  static const String defaultOtaStatusChar = '0ddad461-e5e3-457b-a173-da66bd52bf50';
+  static const String defaultOtaChar = defaultOtaControlChar;
+
+  // Legacy/Alternate Temple Lights Service UUID
+  static const String legacyService = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  static const String legacyControlChar = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
+  static const String legacyOtaControlChar = 'a1b2c3d4-e5f6-7890-abcd-ef1234567892';
+  static const String legacyOtaDataChar = 'a1b2c3d4-e5f6-7890-abcd-ef1234567893';
+  static const String legacyOtaStatusChar = 'a1b2c3d4-e5f6-7890-abcd-ef1234567894';
+
+  static const List<String> knownServices = [
+    defaultService,
+    defaultOtaService,
+    legacyService,
+  ];
   static const String targetDeviceName = 'Temple Lights';
   static const String bundledFirmwareVersion = '1.2.0';
 
   static bool isTargetDevice({required String name, List<String>? serviceUuids}) {
     final lowerName = name.trim().toLowerCase();
-    if (lowerName == targetDeviceName.toLowerCase() || lowerName.contains('temple')) return true;
-    if (serviceUuids != null && serviceUuids.any((u) => u.toLowerCase() == defaultService.toLowerCase())) return true;
+    if (lowerName == targetDeviceName.toLowerCase() ||
+        lowerName.contains('temple') ||
+        lowerName.contains('relay switch') ||
+        lowerName.contains('home motor')) {
+      return true;
+    }
+    if (serviceUuids != null &&
+        serviceUuids.any((u) =>
+            knownServices.any((k) => k.toLowerCase() == u.toLowerCase()))) {
+      return true;
+    }
     return false;
   }
 

@@ -296,18 +296,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
         }
       }
 
-      // 5. If fresh install & not paired, auto-connect to first candidate
-      if (lastId == null && pairedList.isEmpty) {
-        final best = devices.first;
-        state = state.copyWith(rssi: best.rssi);
-        _autoConnectDebounce?.cancel();
-        _autoConnectDebounce = Timer(const Duration(milliseconds: 1200), () {
-          if (state.phase == ConnPhase.scanning && epoch == _sessionEpoch) {
-            _log.i('Auto-connecting to candidate peripheral: ${best.name}');
-            _triggerAutoConnect(best, epoch);
-          }
-        });
-      }
+
     });
 
     try {
@@ -1581,7 +1570,41 @@ class OtaNotifier extends StateNotifier<OtaProgressState> {
         );
       } catch (_) {}
 
+      try {
+        await client.rawBle.clearGattCache(devId);
+        _log.i('GATT cache cleared for $devId');
+      } catch (e) {
+        _log.w('clearGattCache warning: $e');
+      }
+
       await client.rawBle.discoverAllServices(devId).timeout(OtaConstants.serviceDiscoveryTimeout);
+      final discoveredServices = await client.rawBle.getDiscoveredServices(devId);
+      final settings = _ref.read(settingsProvider);
+
+      _log.i('Discovered ${discoveredServices.length} GATT services on $devId:');
+      for (final s in discoveredServices) {
+        final cList = s.characteristics.map((c) => c.id.toString()).join(', ');
+        _log.i('  Service ${s.id}: [$cList]');
+      }
+
+      final resolved = OtaConstants.resolveOtaUuids(
+        discoveredServices: discoveredServices,
+        preferredServiceUuid: settings.customServiceUuid ?? LightBleUuids.defaultOtaService,
+      );
+
+      if (resolved == null) {
+        final serviceSummary = discoveredServices.map((s) {
+          final chars = s.characteristics.map((c) => c.id.toString()).join(', ');
+          return '${s.id} (chars: [$chars])';
+        }).join('; ');
+
+        throw StateError(
+          'OTA service IDs could not be matched on connected device ($devId). Available services: [$serviceSummary]',
+        );
+      }
+
+      _log.i('Matched OTA: ${resolved.sourceDescription}');
+      _log.i('  Service: ${resolved.serviceUuid} | Control: ${resolved.controlUuid} | Data: ${resolved.dataUuid} | Status: ${resolved.statusUuid}');
 
       final int effectiveMtu = negotiatedMtu > 0 ? negotiatedMtu : OtaConstants.fallbackMtu;
       final int attPayload = effectiveMtu - 3;
@@ -1594,17 +1617,17 @@ class OtaNotifier extends StateNotifier<OtaProgressState> {
       final protocol = OtaProtocol(
         ble: client.rawBle,
         deviceId: devId,
-        serviceUuid: OtaConstants.otaServiceUuid,
-        controlUuid: OtaConstants.otaControlCharacteristicUuid,
-        dataUuid: OtaConstants.otaDataCharacteristicUuid,
-        statusUuid: OtaConstants.otaStatusCharacteristicUuid,
+        serviceUuid: resolved.serviceUuid,
+        controlUuid: resolved.controlUuid,
+        dataUuid: resolved.dataUuid,
+        statusUuid: resolved.statusUuid,
         log: (msg) => _log.d(msg),
       );
       _protocol = protocol;
 
       await protocol.initialize();
-      // Settle CCCD descriptor write on ESP32
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      // Settle CCCD descriptor write on ESP32 (matching Boturo Go architecture)
+      await Future<void>.delayed(const Duration(milliseconds: 600));
 
       if (_canceled) return;
 
@@ -1682,9 +1705,19 @@ class OtaNotifier extends StateNotifier<OtaProgressState> {
       await AppHaptics.success();
     } catch (e) {
       _log.e('OTA process exception: $e');
+      final errStr = e.toString();
+      String userMessage = 'Update failed: $e';
+      if (errStr.contains('Characteristic not found') ||
+          errStr.contains('discovered') ||
+          errStr.contains('NoSuchElementException')) {
+        userMessage =
+            'Bluetooth service table on your phone is out-of-sync for $devId. '
+            'Please turn Bluetooth OFF in phone settings, wait 3 seconds, turn it back ON, '
+            'reconnect and tap Retry.';
+      }
       state = state.copyWith(
         phase: OtaPhase.failed,
-        errorMessage: 'Update failed: $e',
+        errorMessage: userMessage,
         statusMessage: 'Update interrupted',
       );
       await AppHaptics.error();

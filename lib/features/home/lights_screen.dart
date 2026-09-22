@@ -23,6 +23,7 @@ class LightsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final conn = ref.watch(lightSessionProvider);
     final light = ref.watch(lightControlProvider);
+    final defaultModes = ref.watch(defaultModesProvider);
     final ctrl = ref.read(lightControlProvider.notifier);
     final session = ref.read(lightSessionProvider.notifier);
 
@@ -44,7 +45,7 @@ class LightsScreen extends ConsumerWidget {
             // 2. Main Control Body
             Expanded(
               child: Center(
-                child: _buildCenterContent(context, conn, light, ctrl, session),
+                child: _buildCenterContent(context, conn, light, ctrl, session, defaultModes),
               ),
             ),
 
@@ -83,6 +84,7 @@ class LightsScreen extends ConsumerWidget {
     LightState light,
     LightControlNotifier ctrl,
     LightSessionNotifier session,
+    List<DefaultModeConfig> defaultModes,
   ) {
     // 1. Scanning State -> Radar Sweep
     if (conn.isScanning) {
@@ -178,7 +180,7 @@ class LightsScreen extends ConsumerWidget {
             const SizedBox(height: 18),
 
             // Mode Selector Cards
-            _buildModeSelector(light, ctrl),
+            _buildModeSelector(light, ctrl, defaultModes),
 
             const SizedBox(height: 14),
 
@@ -244,13 +246,56 @@ class LightsScreen extends ConsumerWidget {
     ).animate().fadeIn(duration: 200.ms);
   }
 
-  Widget _buildModeSelector(LightState light, LightControlNotifier ctrl) {
-    const modes = [
-      {'mode': 0, 'title': 'All Warm', 'sub': '2.5m • 100% Warm', 'icon': Icons.wb_sunny_rounded, 'color': Color(0xFFD97706)},
-      {'mode': 1, 'title': 'Center Warm', 'sub': 'Middle 1.5m Only', 'icon': Icons.adjust_rounded, 'color': Color(0xFFEA580C)},
-      {'mode': 2, 'title': 'All White', 'sub': '2.5m • Pure White', 'icon': Icons.wb_incandescent_rounded, 'color': Color(0xFF475569)},
-      {'mode': 3, 'title': 'Custom RGB', 'sub': 'Color Palette', 'icon': Icons.palette_rounded, 'color': Color(0xFF0284C7)},
+  Widget _buildModeSelector(
+    LightState light,
+    LightControlNotifier ctrl,
+    List<DefaultModeConfig> defaultModes,
+  ) {
+    final m0 = defaultModes.isNotEmpty ? defaultModes[0] : DefaultModeConfig.factoryDefaults[0];
+    final m1 = defaultModes.length > 1 ? defaultModes[1] : DefaultModeConfig.factoryDefaults[1];
+    final m2 = defaultModes.length > 2 ? defaultModes[2] : DefaultModeConfig.factoryDefaults[2];
+
+    final modes = [
+      {
+        'mode': 0,
+        'title': m0.name,
+        'sub': m0.styleLabel,
+        'icon': Icons.wb_sunny_rounded,
+        'color': Color.fromARGB(255, m0.r, m0.g, m0.b),
+      },
+      {
+        'mode': 1,
+        'title': m1.name,
+        'sub': m1.styleLabel,
+        'icon': Icons.adjust_rounded,
+        'color': Color.fromARGB(255, m1.r, m1.g, m1.b),
+      },
+      {
+        'mode': 2,
+        'title': m2.name,
+        'sub': m2.styleLabel,
+        'icon': Icons.wb_incandescent_rounded,
+        'color': Color.fromARGB(255, m2.r, m2.g, m2.b),
+      },
+      {
+        'mode': 3,
+        'title': 'Custom RGB',
+        'sub': 'Color Palette',
+        'icon': Icons.palette_rounded,
+        'color': const Color(0xFF0284C7),
+      },
     ];
+
+    String currentModeTitle;
+    if (light.mode == 0) {
+      currentModeTitle = m0.name;
+    } else if (light.mode == 1) {
+      currentModeTitle = m1.name;
+    } else if (light.mode == 2) {
+      currentModeTitle = m2.name;
+    } else {
+      currentModeTitle = light.modeName;
+    }
 
     return Container(
       decoration: BoxDecoration(
@@ -277,7 +322,7 @@ class LightsScreen extends ConsumerWidget {
                 style: AppTheme.heading(size: 11, color: AppTheme.textMuted, letterSpacing: 1.2),
               ),
               Text(
-                'Current: ${light.modeName}',
+                'Current: $currentModeTitle',
                 style: AppTheme.body(size: 11, color: AppTheme.amber, weight: FontWeight.w600),
               ),
             ],

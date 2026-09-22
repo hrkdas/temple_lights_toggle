@@ -37,14 +37,17 @@
 // ============================================================================
 #define FIRMWARE_VERSION    "1.2.0"
 #define DEVICE_NAME         "Temple Lights"
-#define SERVICE_UUID        "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-#define CHARACTERISTIC_UUID "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
 
-// Boturo Go High-Speed BLE OTA Protocol
-#define OTA_SERVICE_UUID    "f71a0001-2c98-4a7b-a7f9-5e8fbc2d0100"
-#define OTA_CONTROL_UUID    "f71a0002-2c98-4a7b-a7f9-5e8fbc2d0100"
-#define OTA_DATA_UUID       "f71a0003-2c98-4a7b-a7f9-5e8fbc2d0100"
-#define OTA_STATUS_UUID     "f71a0004-2c98-4a7b-a7f9-5e8fbc2d0100"
+// Primary Service & Control Characteristic (Matched to hardware 95d6fedc-cac3-48e2-8221-f534a2782704)
+#define SERVICE_UUID            "95d6fedc-cac3-48e2-8221-f534a2782704"
+#define CHARACTERISTIC_UUID     "0ddad461-e5e3-457b-a173-da66bd52bf4d"
+
+// Dedicated Temple Lights High-Speed OTA Service & Characteristics
+#define OTA_SERVICE_UUID        "95d6fedc-cac3-48e2-8221-f534a2782710"
+#define OTA_CONTROL_UUID        "0ddad461-e5e3-457b-a173-da66bd52bf4e"
+#define OTA_DATA_UUID           "0ddad461-e5e3-457b-a173-da66bd52bf4f"
+#define OTA_STATUS_UUID         "0ddad461-e5e3-457b-a173-da66bd52bf50"
+
 
 static const uint8_t OTA_OP_START = 0x01;
 static const uint8_t OTA_OP_END   = 0x02;
@@ -111,6 +114,27 @@ struct RgbColor {
     uint8_t r, g, b;
 };
 
+struct ModeConfig {
+    char name[24];
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t style;      // 0 = Full Strip, 1 = Center Focus (1.5m)
+    uint8_t brightness; // 1..255
+};
+
+static const ModeConfig FACTORY_DEFAULT_MODES[3] = {
+    { "Warm White",  255, 147, 41,  0, 255 },
+    { "Center Warm", 255, 147, 41,  1, 255 },
+    { "Pure White",  255, 255, 255, 0, 255 }
+};
+
+static ModeConfig defaultModes[3] = {
+    { "Warm White",  255, 147, 41,  0, 255 },
+    { "Center Warm", 255, 147, 41,  1, 255 },
+    { "Pure White",  255, 255, 255, 0, 255 }
+};
+
 enum AnimType {
     ANIM_NONE = 0,
     ANIM_CENTER_ON,
@@ -150,7 +174,8 @@ static NimBLECharacteristic* pOtaControlChar = nullptr;
 static NimBLECharacteristic* pOtaDataChar = nullptr;
 static NimBLECharacteristic* pOtaStatusChar = nullptr;
 
-// Boturo Go High-Speed OTA Runtime
+
+// Temple Lights High-Speed OTA Runtime
 static bool otaInProgress = false;
 static uint32_t otaExpectedFirmwareSize = 0;
 static uint32_t otaWrittenBytes = 0;
@@ -224,6 +249,10 @@ void save_logs_to_nvs();
 void load_logs_from_nvs();
 void send_schedule_hydration_to_app();
 void send_logs_hydration_to_app();
+void save_modes_to_nvs();
+void load_modes_from_nvs();
+void reset_modes_to_defaults();
+void send_modes_hydration_to_app();
 
 // ============================================================================
 // NVS PERSISTENCE FOR STATE
@@ -250,6 +279,40 @@ void load_state() {
     targetBrightness = brightness;
     activeBrightness = (brightness > 0) ? brightness : 255;
     currentBrightness = (float)brightness;
+}
+
+// ============================================================================
+// NVS PERSISTENCE FOR DEFAULT MODES
+// ============================================================================
+void load_modes_from_nvs() {
+    prefs.begin("tl_modes", true);
+    for (int i = 0; i < 3; i++) {
+        String key = "m_" + String(i);
+        if (prefs.isKey(key.c_str())) {
+            prefs.getBytes(key.c_str(), &defaultModes[i], sizeof(ModeConfig));
+            defaultModes[i].name[sizeof(defaultModes[i].name) - 1] = '\0';
+            if (defaultModes[i].brightness == 0) defaultModes[i].brightness = 255;
+            if (defaultModes[i].style > 1) defaultModes[i].style = 0;
+        }
+    }
+    prefs.end();
+    Serial.println("[NVS] Loaded default modes");
+}
+
+void save_modes_to_nvs() {
+    prefs.begin("tl_modes", false);
+    for (int i = 0; i < 3; i++) {
+        String key = "m_" + String(i);
+        prefs.putBytes(key.c_str(), &defaultModes[i], sizeof(ModeConfig));
+    }
+    prefs.end();
+    Serial.println("[NVS] Saved default modes");
+}
+
+void reset_modes_to_defaults() {
+    memcpy(defaultModes, FACTORY_DEFAULT_MODES, sizeof(defaultModes));
+    save_modes_to_nvs();
+    Serial.println("[NVS] Reset default modes to factory defaults");
 }
 
 // ============================================================================
@@ -424,36 +487,31 @@ void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbCol
     int midStart = (int)((NUM_LEDS * 0.20f) + 0.5f);
     int midEnd   = NUM_LEDS - 1 - midStart;
 
-    switch (mode) {
-        case 0:  // Mode 0: all warm white (2.5m)
-            for (int i = 0; i < NUM_LEDS; i++)
-                out[i] = { WARM_R, WARM_G, WARM_B };
-            break;
-
-        case 1:  // Mode 1: middle 1.5m warm white, rest off
+    if (mode < 3) {
+        const ModeConfig& cfg = defaultModes[mode];
+        if (cfg.style == 1) { // Center focus 1.5m (90 LEDs), ends off
             for (int i = 0; i < NUM_LEDS; i++) {
                 if (i >= midStart && i <= midEnd)
-                    out[i] = { WARM_R, WARM_G, WARM_B };
+                    out[i] = { cfg.r, cfg.g, cfg.b };
                 else
                     out[i] = { 0, 0, 0 };
             }
-            break;
-
-        case 2:  // Mode 2: all pure white (2.5m)
-            for (int i = 0; i < NUM_LEDS; i++)
-                out[i] = { WHITE_R, WHITE_G, WHITE_B };
-            break;
-
-        case 3:  // Mode 3: custom RGB (2.5m)
-            for (int i = 0; i < NUM_LEDS; i++)
-                out[i] = { r, g, b };
-            break;
-
-        default:
-            for (int i = 0; i < NUM_LEDS; i++)
-                out[i] = { WARM_R, WARM_G, WARM_B };
-            break;
+        } else { // Full strip (2.5m, 150 LEDs)
+            for (int i = 0; i < NUM_LEDS; i++) {
+                out[i] = { cfg.r, cfg.g, cfg.b };
+            }
+        }
+        return;
     }
+
+    if (mode == 3) { // Mode 3: custom RGB (2.5m)
+        for (int i = 0; i < NUM_LEDS; i++)
+            out[i] = { r, g, b };
+        return;
+    }
+
+    for (int i = 0; i < NUM_LEDS; i++)
+        out[i] = { WARM_R, WARM_G, WARM_B };
 }
 
 void render_frame(unsigned long now) {
@@ -678,7 +736,7 @@ void notify_state() {
 }
 
 // ============================================================================
-// BOTURO GO HIGH-SPEED OTA ENGINE IMPLEMENTATION
+// TEMPLE LIGHTS HIGH-SPEED OTA ENGINE IMPLEMENTATION
 // ============================================================================
 static bool otaEnqueueRxFrame(uint8_t kind, const uint8_t *data, size_t len) {
     if (data == nullptr || len == 0 || len > OTA_RX_MAX_FRAME_SIZE) return false;
@@ -1084,6 +1142,29 @@ void send_logs_hydration_to_app() {
     delay(40);
 }
 
+void send_modes_hydration_to_app() {
+    if (!deviceConnected || pCharacteristic == nullptr) return;
+
+    for (int i = 0; i < 3; i++) {
+        const ModeConfig& m = defaultModes[i];
+        String pkt = "{\"type\":\"mode_cfg\",\"idx\":" + String(i) +
+                     ",\"name\":\"" + String(m.name) + "\"" +
+                     ",\"r\":" + String(m.r) +
+                     ",\"g\":" + String(m.g) +
+                     ",\"b\":" + String(m.b) +
+                     ",\"style\":" + String(m.style) +
+                     ",\"bright\":" + String(m.brightness) + "}";
+        pCharacteristic->setValue((uint8_t*)pkt.c_str(), pkt.length());
+        pCharacteristic->notify();
+        delay(35);
+    }
+
+    String endPkt = "{\"type\":\"modes_end\"}";
+    pCharacteristic->setValue((uint8_t*)endPkt.c_str(), endPkt.length());
+    pCharacteristic->notify();
+    delay(35);
+}
+
 // ============================================================================
 // LIGHTWEIGHT JSON EXTRACTORS
 // ============================================================================
@@ -1158,8 +1239,14 @@ void handle_command(const String& json) {
         if (m >= 0 && m <= 3) {
             bool wasOff = (brightness == 0);
             currentMode = m;
-            if (wasOff) {
+            if (m < 3) {
+                targetBrightness = (defaultModes[m].brightness > 0) ? defaultModes[m].brightness : 255;
+                activeBrightness = targetBrightness;
+                if (!wasOff) brightness = targetBrightness;
+            } else {
                 targetBrightness = (activeBrightness > 0) ? activeBrightness : 255;
+            }
+            if (wasOff) {
                 brightness = targetBrightness;
                 start_center_on_animation();
                 record_light_log(true, "App Mode Change");
@@ -1224,14 +1311,15 @@ void handle_command(const String& json) {
     }
 
     if (cmd == "on") {
-        // Switch ON: advance to next mode and loop among the 3 preset states
+        // Switch ON: advance to next mode and loop among the 3 preset states (0 -> 1 -> 2 -> 0)
         if (currentMode >= 2) {
             currentMode = 0;
         } else {
             currentMode++;
         }
-        targetBrightness = (activeBrightness > 0) ? activeBrightness : 255;
+        targetBrightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
         brightness = targetBrightness;
+        activeBrightness = targetBrightness;
         start_center_on_animation();
         stateDirty = true;
         lastStateChangeMs = millis();
@@ -1242,15 +1330,17 @@ void handle_command(const String& json) {
     }
 
     if (cmd == "next_mode") {
+        // Cycle among the 3 preset states (0 -> 1 -> 2 -> 0)
         if (currentMode >= 2) {
             currentMode = 0;
         } else {
             currentMode++;
         }
-        bool wasOff = (brightness == 0);
+        targetBrightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
+        brightness = targetBrightness;
+        activeBrightness = targetBrightness;
+        bool wasOff = (currentBrightness <= 0.5f);
         if (wasOff) {
-            targetBrightness = (activeBrightness > 0) ? activeBrightness : 255;
-            brightness = targetBrightness;
             start_center_on_animation();
             record_light_log(true, "App Next Mode");
         } else {
@@ -1331,6 +1421,9 @@ void handle_command(const String& json) {
     // 3. Schedules Hydration & CRUD
     if (cmd == "get_scheds" || cmd == "sync") {
         send_schedule_hydration_to_app();
+        if (cmd == "sync") {
+            send_modes_hydration_to_app();
+        }
         return;
     }
 
@@ -1464,7 +1557,66 @@ void handle_command(const String& json) {
         return;
     }
 
-    // 6. Over-The-Air (OTA) is handled via dedicated high-speed Boturo Go GATT service
+    // 6. Default Boot Modes Management
+    if (cmd == "get_modes") {
+        send_modes_hydration_to_app();
+        return;
+    }
+
+    if (cmd == "save_mode") {
+        int idx = extract_json_int(json, "idx", -1);
+        if (idx >= 0 && idx < 3) {
+            String name = extract_json_string(json, "name");
+            int r = extract_json_int(json, "r", defaultModes[idx].r);
+            int g = extract_json_int(json, "g", defaultModes[idx].g);
+            int b = extract_json_int(json, "b", defaultModes[idx].b);
+            int style = extract_json_int(json, "style", defaultModes[idx].style);
+            int bright = extract_json_int(json, "bright", defaultModes[idx].brightness);
+
+            if (!name.isEmpty()) {
+                strncpy(defaultModes[idx].name, name.c_str(), sizeof(defaultModes[idx].name) - 1);
+                defaultModes[idx].name[sizeof(defaultModes[idx].name) - 1] = '\0';
+            }
+            defaultModes[idx].r = constrain(r, 0, 255);
+            defaultModes[idx].g = constrain(g, 0, 255);
+            defaultModes[idx].b = constrain(b, 0, 255);
+            defaultModes[idx].style = (style == 1) ? 1 : 0;
+            defaultModes[idx].brightness = constrain(bright, 1, 255);
+
+            save_modes_to_nvs();
+
+            // If currently running this mode, live-update the LEDs
+            if (currentMode == idx && (brightness > 0 || currentBrightness > 0.5f)) {
+                targetBrightness = defaultModes[idx].brightness;
+                brightness = targetBrightness;
+                activeBrightness = targetBrightness;
+                start_crossfade_animation();
+                notify_state();
+            }
+
+            send_modes_hydration_to_app();
+            Serial.printf("[Mode] Saved Mode %d ('%s', rgb=%d,%d,%d, style=%d, bright=%d)\n",
+                          idx, defaultModes[idx].name, defaultModes[idx].r, defaultModes[idx].g, defaultModes[idx].b,
+                          defaultModes[idx].style, defaultModes[idx].brightness);
+        }
+        return;
+    }
+
+    if (cmd == "reset_modes") {
+        reset_modes_to_defaults();
+        if (currentMode < 3 && (brightness > 0 || currentBrightness > 0.5f)) {
+            targetBrightness = defaultModes[currentMode].brightness;
+            brightness = targetBrightness;
+            activeBrightness = targetBrightness;
+            start_crossfade_animation();
+            notify_state();
+        }
+        send_modes_hydration_to_app();
+        Serial.println("[Mode] Restored factory default modes");
+        return;
+    }
+
+    // 7. Over-The-Air (OTA) is handled via high-speed characteristics under primary SERVICE_UUID
 
     Serial.printf("[BLE] Unknown command: %s\n", cmd.c_str());
 }
@@ -1539,8 +1691,14 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
             if (b <= 3) {
                 bool wasOff = (brightness == 0);
                 currentMode = b;
-                if (wasOff) {
+                if (b < 3) {
+                    targetBrightness = (defaultModes[b].brightness > 0) ? defaultModes[b].brightness : 255;
+                    activeBrightness = targetBrightness;
+                    if (!wasOff) brightness = targetBrightness;
+                } else {
                     targetBrightness = (activeBrightness > 0) ? activeBrightness : 255;
+                }
+                if (wasOff) {
                     brightness = targetBrightness;
                     start_center_on_animation();
                     record_light_log(true, "App Byte Mode");
@@ -1668,6 +1826,7 @@ void setup() {
     otaMarkAppValid();
 
     load_state();
+    load_modes_from_nvs();
     load_schedules_from_nvs();
     load_logs_from_nvs();
 
@@ -1679,10 +1838,10 @@ void setup() {
     } else {
         currentMode = lastMode + 1;
     }
-    brightness = 255; // Ensure 100% brightness on power cycle
-    targetBrightness = 255;
-    activeBrightness = 255;
-    currentBrightness = 255.0f;
+    brightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
+    targetBrightness = brightness;
+    activeBrightness = brightness;
+    currentBrightness = (float)brightness;
     save_state();     // Persist immediately so subsequent boots advance from here
 
     Serial.printf("[Boot] Last Mode: %d -> Active Mode: %d | Brightness: %d\n",
@@ -1698,7 +1857,7 @@ void setup() {
     pBleServer = NimBLEDevice::createServer();
     pBleServer->setCallbacks(new ServerCallbacks());
 
-    // 1. Primary Temple Lights Control Service
+    // 1. Primary Temple Lights Service (Lighting Control, Telemetry, Schedules, Logs)
     NimBLEService* pService = pBleServer->createService(SERVICE_UUID);
     pCharacteristic = pService->createCharacteristic(
         CHARACTERISTIC_UUID,
@@ -1711,7 +1870,7 @@ void setup() {
     pCharacteristic->setValue(initBuf, 5);
     pService->start();
 
-    // 2. Dedicated Boturo Go High-Speed OTA Service
+    // 2. Dedicated High-Speed OTA Service (Isolated GATT Service matching Boturo Go architecture)
     NimBLEService* pOtaService = pBleServer->createService(OTA_SERVICE_UUID);
     pOtaControlChar = pOtaService->createCharacteristic(
         OTA_CONTROL_UUID,
@@ -1732,15 +1891,16 @@ void setup() {
     pOtaStatusChar->setValue(std::string("FW:") + std::string(FIRMWARE_VERSION));
     pOtaService->start();
 
+    // Clean, standard-compliant advertising: Only advertise primary SERVICE_UUID
+    // (Flags 3B + 128-bit UUID 18B = 21B <= 31B max; Name in scan response)
     NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
     pAdv->addServiceUUID(SERVICE_UUID);
-    pAdv->addServiceUUID(OTA_SERVICE_UUID);
     pAdv->setScanResponse(true);
     pAdv->start();
 
     Serial.printf("[BLE] Advertising as '%s'\n", DEVICE_NAME);
-    Serial.printf("[BLE] Service:     %s\n", SERVICE_UUID);
-    Serial.printf("[BLE] OTA Service: %s\n", OTA_SERVICE_UUID);
+    Serial.printf("[BLE] Primary Service: %s\n", SERVICE_UUID);
+    Serial.printf("[BLE] OTA Service:     %s\n", OTA_SERVICE_UUID);
     Serial.println("[BLE] Ready. Waiting for app connection...");
 
     // Initialize LED strip at full 255 scale and start Center-Out Bloom animation
