@@ -8,6 +8,7 @@ import '../modes/modes_screen.dart';
 import '../scanner/device_sheet.dart';
 import '../schedule/schedule_screen.dart';
 import '../settings/settings_sheet.dart';
+import '../wifi/wifi_setup_sheet.dart';
 
 /// Main navigation shell hosting Lights (Control), Schedule, and Logs tabs.
 class MainNavShell extends ConsumerStatefulWidget {
@@ -147,6 +148,26 @@ class _MainNavShellState extends ConsumerState<MainNavShell> {
           ],
         ),
         actions: [
+          Consumer(
+            builder: (context, ref, _) {
+              final wifi = ref.watch(wifiProvider);
+              final isConnected = wifi.isConnected;
+              final isConnecting = wifi.isConnecting;
+              final iconColor = isConnected
+                  ? AppTheme.green
+                  : (isConnecting ? AppTheme.amber : AppTheme.textSecondary);
+              return IconButton(
+                icon: Icon(
+                  isConnected ? Icons.wifi_rounded : (isConnecting ? Icons.wifi_find_rounded : Icons.wifi_rounded),
+                  color: iconColor,
+                ),
+                tooltip: isConnected
+                    ? 'WiFi: ${wifi.currentSsid} (Tap to manage)'
+                    : (isConnecting ? 'Connecting to WiFi...' : 'Configure WiFi & Clock'),
+                onPressed: () => WifiSetupSheet.show(context),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.bluetooth_searching_rounded, color: AppTheme.amber),
             tooltip: 'Devices',

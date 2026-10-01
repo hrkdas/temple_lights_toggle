@@ -7,6 +7,7 @@
 #include <time.h>
 #include <esp_bt.h>
 #include <esp_ota_ops.h>
+#include "wifi_manager.h"
 
 // ============================================================================
 // HARDWARE & ANIMATION CONFIG
@@ -203,7 +204,7 @@ static volatile uint8_t sOtaRxTail = 0;
 static portMUX_TYPE sOtaRxMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Time & Scheduler runtime
-static bool timeIsSynchronized = false;
+bool timeIsSynchronized = false;
 static ScheduleItem schedules[MAX_SCHEDULES];
 static int scheduleCount = 0;
 
@@ -253,6 +254,7 @@ void save_modes_to_nvs();
 void load_modes_from_nvs();
 void reset_modes_to_defaults();
 void send_modes_hydration_to_app();
+void evaluate_schedules();
 
 // ============================================================================
 // NVS PERSISTENCE FOR STATE
@@ -879,6 +881,7 @@ void otaAbortSession() {
     otaWriteBufferLen = 0;
     otaRestoreNormalBle();
     otaClearRxQueue();
+    wifiManagerResumeAfterOta();
 }
 
 void otaHandleControlFrame(const uint8_t* data, size_t len) {
@@ -919,6 +922,7 @@ void otaHandleControlFrame(const uint8_t* data, size_t len) {
         }
 
         otaInProgress = true;
+        wifiManagerPauseForOta();
         otaExpectedFirmwareSize = fwSize;
         otaWrittenBytes = 0;
         otaExpectedChunkIndex = 0;
@@ -1371,6 +1375,14 @@ void handle_command(const String& json) {
 
     // 2. Time Synchronization: {"cmd":"time","y":2026,"mon":9,"d":21,"h":11,"m":30,"s":0,"epoch":...}
     if (cmd == "time") {
+        int tzMin = extract_json_int(json, "tz_min", -9999);
+        if (tzMin >= -720 && tzMin <= 720) {
+            wifiManagerSetTimezoneOffset((int16_t)tzMin);
+        } else {
+            wifiManagerApplyTimezone(wifiManagerGetTimezoneOffset());
+        }
+
+        uint32_t epoch = (uint32_t)extract_json_int(json, "epoch", 0);
         int y = extract_json_int(json, "y", 0);
         int mon = extract_json_int(json, "mon", 0);
         int d = extract_json_int(json, "d", 0);
@@ -1378,12 +1390,13 @@ void handle_command(const String& json) {
         int m = extract_json_int(json, "m", 0);
         int s = extract_json_int(json, "s", 0);
         int w = extract_json_int(json, "w", 1);
-        uint32_t epoch = (uint32_t)extract_json_int(json, "epoch", 0);
 
-        struct tm tmInfo;
-        memset(&tmInfo, 0, sizeof(tmInfo));
-
-        if (y >= 2024 && mon >= 1 && mon <= 12 && d >= 1 && d <= 31) {
+        time_t t = 0;
+        if (epoch > 1700000000) {
+            t = (time_t)epoch;
+        } else if (y >= 2024 && mon >= 1 && mon <= 12 && d >= 1 && d <= 31) {
+            struct tm tmInfo;
+            memset(&tmInfo, 0, sizeof(tmInfo));
             tmInfo.tm_year = y - 1900;
             tmInfo.tm_mon = mon - 1;
             tmInfo.tm_mday = d;
@@ -1392,29 +1405,54 @@ void handle_command(const String& json) {
             tmInfo.tm_sec = s;
             tmInfo.tm_wday = (w % 7);
             tmInfo.tm_isdst = -1;
-        } else if (epoch > 1700000000) {
-            time_t ep = (time_t)epoch;
-            localtime_r(&ep, &tmInfo);
-            y = tmInfo.tm_year + 1900;
-            mon = tmInfo.tm_mon + 1;
-            d = tmInfo.tm_mday;
-            h = tmInfo.tm_hour;
-            m = tmInfo.tm_min;
-            s = tmInfo.tm_sec;
+            t = mktime(&tmInfo);
         }
 
-        time_t t = mktime(&tmInfo);
-        struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
-        settimeofday(&tv, NULL);
-        timeIsSynchronized = true;
+        if (t > 1700000000) {
+            struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
+            settimeofday(&tv, NULL);
+            timeIsSynchronized = true;
 
-        Serial.printf("[Clock] Synchronized to %04d-%02d-%02d %02d:%02d:%02d\n", y, mon, d, h, m, s);
+            struct tm tmLocal;
+            localtime_r(&t, &tmLocal);
 
-        if (deviceConnected && pCharacteristic != nullptr) {
-            String ack = "{\"type\":\"time_synced\",\"epoch\":" + String((uint32_t)t) + "}";
-            pCharacteristic->setValue((uint8_t*)ack.c_str(), ack.length());
-            pCharacteristic->notify();
+            Serial.printf("[Clock] Synchronized to %04d-%02d-%02d %02d:%02d:%02d (Mumbai IST)\n",
+                          tmLocal.tm_year + 1900, tmLocal.tm_mon + 1, tmLocal.tm_mday,
+                          tmLocal.tm_hour, tmLocal.tm_min, tmLocal.tm_sec);
+
+            if (deviceConnected && pCharacteristic != nullptr) {
+                String ack = "{\"type\":\"time_synced\",\"epoch\":" + String((uint32_t)t) + "}";
+                pCharacteristic->setValue((uint8_t*)ack.c_str(), ack.length());
+                pCharacteristic->notify();
+            }
+
+            evaluate_schedules();
         }
+        return;
+    }
+
+    // 2b. WiFi Provisioning & Autonomous Network Clock
+    if (cmd == "wifi_scan") {
+        wifiManagerStartScan();
+        return;
+    }
+    if (cmd == "wifi_connect") {
+        String ssid = extract_json_string(json, "ssid");
+        String psk = extract_json_string(json, "psk");
+        bool save = extract_json_bool(json, "save", true);
+        wifiManagerConnect(ssid, psk, save);
+        return;
+    }
+    if (cmd == "wifi_forget") {
+        wifiManagerForget();
+        return;
+    }
+    if (cmd == "wifi_status") {
+        wifiManagerQueryStatus();
+        return;
+    }
+    if (cmd == "ntp_sync") {
+        wifiManagerTriggerNtp();
         return;
     }
 
@@ -1468,6 +1506,7 @@ void handle_command(const String& json) {
 
         save_schedules_to_nvs();
         send_schedule_hydration_to_app();
+        evaluate_schedules();
         return;
     }
 
@@ -1478,6 +1517,7 @@ void handle_command(const String& json) {
             if (strcmp(schedules[i].id, id.c_str()) == 0) {
                 schedules[i].isEnabled = en;
                 save_schedules_to_nvs();
+                evaluate_schedules();
                 break;
             }
         }
@@ -1500,6 +1540,7 @@ void handle_command(const String& json) {
             scheduleCount--;
             save_schedules_to_nvs();
             send_schedule_hydration_to_app();
+            evaluate_schedules();
         }
         return;
     }
@@ -1733,6 +1774,56 @@ class OtaDataCallbacks : public NimBLECharacteristicCallbacks {
 // ============================================================================
 // AUTONOMOUS BACKGROUND EVALUATION (SCHEDULES & TIMER)
 // ============================================================================
+static bool bootScheduleEvaluated = false;
+
+bool is_schedule_in_range(const ScheduleItem& s, int curDay, int curHour, int curMin) {
+    if (!s.isEnabled || !s.hasTurnOn || !s.hasTurnOff) return false;
+
+    int onMins  = s.turnOnHour * 60 + s.turnOnMinute;
+    int offMins = s.turnOffHour * 60 + s.turnOffMinute;
+    int curMins = curHour * 60 + curMin;
+
+    if (onMins == offMins) return false;
+
+    if (onMins < offMins) {
+        // Same-day schedule (e.g. 18:30 to 21:00)
+        bool dayMatches = (s.repeatDaysMask & (1 << curDay)) != 0;
+        return dayMatches && (curMins >= onMins && curMins < offMins);
+    } else {
+        // Overnight schedule (e.g. 18:00 to 06:00)
+        if (curMins >= onMins) {
+            // Started today before midnight
+            return (s.repeatDaysMask & (1 << curDay)) != 0;
+        } else if (curMins < offMins) {
+            // Started yesterday before midnight
+            int prevDay = (curDay == 1) ? 7 : (curDay - 1);
+            return (s.repeatDaysMask & (1 << prevDay)) != 0;
+        }
+        return false;
+    }
+}
+
+static void activate_scheduled_mode(ScheduleItem& s, const char* reason) {
+    currentMode = s.targetMode;
+    targetBrightness = s.targetBrightness > 0 ? s.targetBrightness : 255;
+    brightness = targetBrightness;
+    if (s.targetMode == 3) {
+        customR = (s.targetR > 0 || s.targetG > 0 || s.targetB > 0) ? s.targetR : 255;
+        customG = s.targetG;
+        customB = s.targetB;
+    }
+    if (currentAnim == ANIM_NONE && brightness > 0 && currentBrightness > 0.5f) {
+        start_crossfade_animation();
+    } else {
+        start_center_on_animation();
+    }
+    save_state();
+    notify_state();
+    record_light_log(true, s.name);
+    Serial.printf("[Sched] ⏰ Activated schedule (%s): %s (Mode %d, Bright %d)\n",
+                  reason, s.name, currentMode, brightness);
+}
+
 void evaluate_schedules() {
     if (!timeIsSynchronized) return;
 
@@ -1744,39 +1835,32 @@ void evaluate_schedules() {
     int curMin  = tmInfo.tm_min;
     int curDay  = tmInfo.tm_wday == 0 ? 7 : tmInfo.tm_wday; // 1=Mon .. 7=Sun
 
+    bool isBootCheck = !bootScheduleEvaluated;
+
     for (int i = 0; i < scheduleCount; i++) {
         ScheduleItem& s = schedules[i];
         if (!s.isEnabled) continue;
-        if (!(s.repeatDaysMask & (1 << curDay))) continue;
 
-        // Turn ON trigger
-        if (s.hasTurnOn && curHour == s.turnOnHour && curMin == s.turnOnMinute) {
-            char key[24];
-            snprintf(key, sizeof(key), "ON_%d_%02d_%02d", tmInfo.tm_mday, curHour, curMin);
-            if (strcmp(s.lastTriggeredKey, key) != 0) {
-                strncpy(s.lastTriggeredKey, key, sizeof(s.lastTriggeredKey) - 1);
-                currentMode = s.targetMode;
-                targetBrightness = s.targetBrightness > 0 ? s.targetBrightness : 255;
-                brightness = targetBrightness;
-                if (s.targetMode == 3) {
-                    customR = (s.targetR > 0 || s.targetG > 0 || s.targetB > 0) ? s.targetR : 255;
-                    customG = s.targetG;
-                    customB = s.targetB;
-                }
-                start_center_on_animation();
-                save_state();
-                notify_state();
-                record_light_log(true, s.name);
-                Serial.printf("[Sched] ⏰ Triggered ON: %s (Mode %d, Bright %d)\n", s.name, currentMode, brightness);
-            }
+        int onMins  = s.turnOnHour * 60 + s.turnOnMinute;
+        int offMins = s.turnOffHour * 60 + s.turnOffMinute;
+        int curMins = curHour * 60 + curMin;
+
+        // Determine session key day (accounting for overnight schedules starting yesterday)
+        int startDay = curDay;
+        if (s.hasTurnOff && onMins > offMins && curMins < offMins) {
+            startDay = (curDay == 1) ? 7 : (curDay - 1);
         }
 
-        // Turn OFF trigger
+        char onKey[24];
+        snprintf(onKey, sizeof(onKey), "ON_%d_%02d_%02d", startDay, s.turnOnHour, s.turnOnMinute);
+
+        char offKey[24];
+        snprintf(offKey, sizeof(offKey), "OFF_%d_%02d_%02d", tmInfo.tm_mday, curHour, curMin);
+
+        // 1. Turn OFF trigger (when scheduled off time is reached)
         if (s.hasTurnOff && curHour == s.turnOffHour && curMin == s.turnOffMinute) {
-            char key[24];
-            snprintf(key, sizeof(key), "OFF_%d_%02d_%02d", tmInfo.tm_mday, curHour, curMin);
-            if (strcmp(s.lastTriggeredKey, key) != 0) {
-                strncpy(s.lastTriggeredKey, key, sizeof(s.lastTriggeredKey) - 1);
+            if (strcmp(s.lastTriggeredKey, offKey) != 0) {
+                strncpy(s.lastTriggeredKey, offKey, sizeof(s.lastTriggeredKey) - 1);
                 if (brightness > 0 || currentBrightness > 0.5f) {
                     start_center_off_animation();
                 }
@@ -1785,8 +1869,25 @@ void evaluate_schedules() {
                 record_light_log(false, s.name);
                 Serial.printf("[Sched] ⏰ Triggered OFF: %s\n", s.name);
             }
+            continue;
+        }
+
+        // 2. Turn ON & Range Check
+        if (s.hasTurnOn) {
+            bool inRange = s.hasTurnOff ? is_schedule_in_range(s, curDay, curHour, curMin) : false;
+            bool exactMinute = (curHour == s.turnOnHour && curMin == s.turnOnMinute && (s.repeatDaysMask & (1 << curDay)));
+
+            // Activate if in range and (session not triggered yet OR this is the first boot evaluation),
+            // OR if the exact start minute matched.
+            if ((inRange && (strcmp(s.lastTriggeredKey, onKey) != 0 || isBootCheck)) ||
+                (exactMinute && strcmp(s.lastTriggeredKey, onKey) != 0)) {
+                strncpy(s.lastTriggeredKey, onKey, sizeof(s.lastTriggeredKey) - 1);
+                activate_scheduled_mode(s, isBootCheck ? "Boot In-Range" : "Scheduled");
+            }
         }
     }
+
+    bootScheduleEvaluated = true;
 }
 
 void evaluate_auto_off_timer() {
@@ -1907,6 +2008,9 @@ void setup() {
     strip.begin();
     strip.setBrightness(255);
     start_center_on_animation();
+
+    // Initialize WiFi Provisioner & Autonomous NTP Clock Engine
+    wifiManagerInit(pCharacteristic);
 }
 
 void loop() {
@@ -1925,6 +2029,9 @@ void loop() {
     }
 
     unsigned long now = millis();
+
+    // Drive non-blocking WiFi manager & autonomous SNTP clock engine
+    wifiManagerTick(now);
 
     // High-priority 50 FPS animation engine
     update_animation(now);

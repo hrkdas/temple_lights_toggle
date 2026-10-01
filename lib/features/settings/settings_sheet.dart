@@ -5,6 +5,7 @@ import '../../core/log.dart';
 import '../../domain/providers.dart';
 import '../../ui/theme.dart';
 import '../ota/ota_update_screen.dart';
+import '../wifi/wifi_setup_sheet.dart';
 
 /// Settings modal sheet to adjust UUIDs, payload formats, auto-connect, and view logs.
 class SettingsSheet extends ConsumerStatefulWidget {
@@ -265,6 +266,133 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                       _saveUuids();
                     },
                   ),
+                ),
+                const SizedBox(height: 20),
+
+                // Temple WiFi & Network Clock Card
+                Consumer(
+                  builder: (context, ref, _) {
+                    final wifi = ref.watch(wifiProvider);
+                    final isConnected = wifi.isConnected;
+                    final isConnecting = wifi.isConnecting;
+                    final isScanning = wifi.isScanning;
+
+                    final Color accentColor = isConnected
+                        ? AppTheme.green
+                        : (isConnecting ? AppTheme.amber : AppTheme.cyan);
+
+                    final String statusText = isConnected
+                        ? 'Connected • ${wifi.currentSsid}'
+                        : (isConnecting
+                            ? 'Connecting to ${wifi.currentSsid}...'
+                            : (wifi.currentSsid.isNotEmpty
+                                ? 'Offline • Saved: ${wifi.currentSsid}'
+                                : 'No WiFi configured'));
+
+                    final String subText = isConnected && wifi.ipAddress.isNotEmpty
+                        ? 'IP: ${wifi.ipAddress} • SNTP active'
+                        : (isConnecting
+                            ? 'Verifying network & NTP gateway'
+                            : 'Synchronizes schedules & clock via NTP');
+
+                    return Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceRaised,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isConnected
+                              ? AppTheme.green.withValues(alpha: 0.3)
+                              : AppTheme.border,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: accentColor.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  isConnected
+                                      ? Icons.wifi_rounded
+                                      : (isConnecting || isScanning
+                                          ? Icons.wifi_find_rounded
+                                          : Icons.wifi_off_rounded),
+                                  size: 20,
+                                  color: accentColor,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Text('Temple WiFi & Clock', style: AppTheme.heading(size: 15)),
+                                        const Spacer(),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: accentColor.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: accentColor.withValues(alpha: 0.3)),
+                                          ),
+                                          child: Text(
+                                            isConnected
+                                                ? 'ONLINE'
+                                                : (isConnecting ? 'CONNECTING' : 'BLE ONLY'),
+                                            style: AppTheme.heading(size: 9.5, color: accentColor),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      statusText,
+                                      style: AppTheme.body(size: 12, color: AppTheme.textPrimary),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 1),
+                                    Text(
+                                      subText,
+                                      style: AppTheme.mono(size: 10.5, color: AppTheme.textMuted),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.settings_ethernet_rounded, size: 18, color: Colors.white),
+                              label: Text('Configure WiFi & Clock', style: AppTheme.heading(size: 13, color: Colors.white)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isConnected ? AppTheme.surface : AppTheme.cyan,
+                                foregroundColor: isConnected ? AppTheme.cyan : Colors.white,
+                                side: isConnected ? const BorderSide(color: AppTheme.cyan) : BorderSide.none,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: isConnected ? 0 : 1,
+                              ),
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                WifiSetupSheet.show(context);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 20),
 

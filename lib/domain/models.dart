@@ -810,3 +810,119 @@ class DefaultModeConfig {
   ];
 }
 
+enum WifiPhase {
+  idle,
+  scanning,
+  connecting,
+  gotIp,
+  internetOk,
+  saved,
+  connected,
+  failed,
+  disconnected,
+}
+
+class WifiNetworkItem {
+  const WifiNetworkItem({
+    required this.ssid,
+    required this.rssi,
+    required this.auth,
+  });
+
+  final String ssid;
+  final int rssi;
+  final String auth;
+
+  bool get isSecured => auth.toUpperCase() != 'OPEN' && auth.isNotEmpty;
+
+  int get signalBars {
+    if (rssi >= -60) return 3;
+    if (rssi >= -75) return 2;
+    return 1;
+  }
+
+  factory WifiNetworkItem.fromJson(Map<String, dynamic> json) => WifiNetworkItem(
+        ssid: json['ssid'] as String? ?? '',
+        rssi: (json['rssi'] as num?)?.toInt() ?? -100,
+        auth: json['auth'] as String? ?? 'WPA2',
+      );
+
+  Map<String, dynamic> toJson() => {
+        'ssid': ssid,
+        'rssi': rssi,
+        'auth': auth,
+      };
+}
+
+class WifiConnectionState {
+  const WifiConnectionState({
+    this.phase = WifiPhase.idle,
+    this.currentSsid = '',
+    this.ipAddress = '',
+    this.rssi = 0,
+    this.failureReason = 'none',
+    this.scannedNetworks = const [],
+    this.isScanning = false,
+    this.lastNtpSyncEpoch,
+  });
+
+  final WifiPhase phase;
+  final String currentSsid;
+  final String ipAddress;
+  final int rssi;
+  final String failureReason;
+  final List<WifiNetworkItem> scannedNetworks;
+  final bool isScanning;
+  final int? lastNtpSyncEpoch;
+
+  bool get isConnected => phase == WifiPhase.connected && ipAddress.isNotEmpty;
+  bool get isConnecting => phase == WifiPhase.connecting || phase == WifiPhase.gotIp || phase == WifiPhase.internetOk;
+  bool get hasFailed => phase == WifiPhase.failed;
+
+  String get humanReadableStatus {
+    switch (phase) {
+      case WifiPhase.scanning:
+        return 'Scanning 2.4 GHz networks…';
+      case WifiPhase.connecting:
+        return 'Connecting to $currentSsid…';
+      case WifiPhase.gotIp:
+        return 'IP assigned ($ipAddress)…';
+      case WifiPhase.internetOk:
+        return 'Internet verified…';
+      case WifiPhase.saved:
+        return 'Credentials saved';
+      case WifiPhase.connected:
+        return currentSsid.isNotEmpty ? 'Connected ($currentSsid)' : 'Connected';
+      case WifiPhase.failed:
+        return 'Connection failed: $failureReason';
+      case WifiPhase.disconnected:
+        return 'Disconnected';
+      case WifiPhase.idle:
+        return 'Not Configured';
+    }
+  }
+
+  WifiConnectionState copyWith({
+    WifiPhase? phase,
+    String? currentSsid,
+    String? ipAddress,
+    int? rssi,
+    String? failureReason,
+    List<WifiNetworkItem>? scannedNetworks,
+    bool? isScanning,
+    int? lastNtpSyncEpoch,
+  }) =>
+      WifiConnectionState(
+        phase: phase ?? this.phase,
+        currentSsid: currentSsid ?? this.currentSsid,
+        ipAddress: ipAddress ?? this.ipAddress,
+        rssi: rssi ?? this.rssi,
+        failureReason: failureReason ?? this.failureReason,
+        scannedNetworks: scannedNetworks ?? this.scannedNetworks,
+        isScanning: isScanning ?? this.isScanning,
+        lastNtpSyncEpoch: lastNtpSyncEpoch ?? this.lastNtpSyncEpoch,
+      );
+
+  static const idle = WifiConnectionState();
+}
+

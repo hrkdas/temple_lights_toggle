@@ -78,7 +78,42 @@ class LightPacketEncoder {
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'get_state'})));
 
   static Uint8List encodeTimeSync(DateTime now) =>
-      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'time', 'y': now.year, 'mon': now.month, 'd': now.day, 'h': now.hour, 'm': now.minute, 's': now.second, 'w': now.weekday, 'epoch': now.millisecondsSinceEpoch ~/ 1000})));
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'time',
+        'y': now.year,
+        'mon': now.month,
+        'd': now.day,
+        'h': now.hour,
+        'm': now.minute,
+        's': now.second,
+        'w': now.weekday,
+        'epoch': now.millisecondsSinceEpoch ~/ 1000,
+        'tz_min': now.timeZoneOffset.inMinutes,
+      })));
+
+  static Uint8List encodeWifiScan() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'wifi_scan'})));
+
+  static Uint8List encodeWifiConnect({
+    required String ssid,
+    required String psk,
+    bool save = true,
+  }) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'wifi_connect',
+        'ssid': ssid,
+        'psk': psk,
+        'save': save,
+      })));
+
+  static Uint8List encodeWifiForget() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'wifi_forget'})));
+
+  static Uint8List encodeWifiStatus() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'wifi_status'})));
+
+  static Uint8List encodeTriggerNtp() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'ntp_sync'})));
 
   static Uint8List encodeSaveSchedule({
     required String id,

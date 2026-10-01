@@ -462,6 +462,14 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               _ref.read(autoOffTimerProvider.notifier).cancelTimer(dispatchBle: false);
             } else if (type == 'timer_done') {
               _ref.read(autoOffTimerProvider.notifier).onHardwareTimerDone();
+            } else if (type == 'wifi_scan_item') {
+              _ref.read(wifiProvider.notifier).handleIncomingScanItem(json);
+            } else if (type == 'wifi_scan_done') {
+              _ref.read(wifiProvider.notifier).handleIncomingScanDone(json);
+            } else if (type == 'wifi_status') {
+              _ref.read(wifiProvider.notifier).handleIncomingStatus(json);
+            } else if (type == 'ntp_synced') {
+              _ref.read(wifiProvider.notifier).handleIncomingNtpSynced(json);
             }
           }
         } catch (e) {
@@ -476,6 +484,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
     _startPeriodicTimeSync();
     unawaited(_ref.read(schedulesProvider.notifier).onDeviceConnected());
     unawaited(_ref.read(defaultModesProvider.notifier).onDeviceConnected());
+    unawaited(_ref.read(wifiProvider.notifier).requestStatus());
     _startLiveRssiTracking(deviceId);
 
     // Initial state query
@@ -1865,5 +1874,205 @@ class DefaultModesNotifier extends StateNotifier<List<DefaultModeConfig>> {
 
 final defaultModesProvider = StateNotifierProvider<DefaultModesNotifier, List<DefaultModeConfig>>((ref) {
   return DefaultModesNotifier(ref);
+});
+
+// ============================================================================
+// WiFi Provisioning & Autonomous Network Clock Provider
+// ============================================================================
+
+class WifiNotifier extends StateNotifier<WifiConnectionState> {
+  WifiNotifier(this._ref) : super(WifiConnectionState.idle);
+
+  final Ref _ref;
+
+  void handleIncomingScanItem(Map<String, dynamic> json) {
+    try {
+      final item = WifiNetworkItem.fromJson(json);
+      if (item.ssid.isEmpty) return;
+
+      final existing = List<WifiNetworkItem>.from(state.scannedNetworks);
+      final idx = existing.indexWhere((n) => n.ssid == item.ssid);
+      if (idx >= 0) {
+        if (item.rssi > existing[idx].rssi) {
+          existing[idx] = item;
+        }
+      } else {
+        existing.add(item);
+      }
+      existing.sort((a, b) => b.rssi.compareTo(a.rssi));
+      state = state.copyWith(scannedNetworks: existing);
+    } catch (e) {
+      _log.w('Failed to parse wifi_scan_item: $e');
+    }
+  }
+
+  void handleIncomingScanDone(Map<String, dynamic> json) {
+    _log.i('WiFi scan complete. Total networks found: ${state.scannedNetworks.length}');
+    state = state.copyWith(isScanning: false);
+  }
+
+  void handleIncomingStatus(Map<String, dynamic> json) {
+    final stateStr = json['state'] as String? ?? 'idle';
+    final reasonStr = json['reason'] as String? ?? 'none';
+    final ssid = json['ssid'] as String? ?? state.currentSsid;
+    final ip = json['ip'] as String? ?? '';
+    final rssi = (json['rssi'] as num?)?.toInt() ?? 0;
+
+    WifiPhase phase = WifiPhase.idle;
+    switch (stateStr) {
+      case 'scanning':
+        phase = WifiPhase.scanning;
+        break;
+      case 'connecting':
+        phase = WifiPhase.connecting;
+        break;
+      case 'got_ip':
+        phase = WifiPhase.gotIp;
+        break;
+      case 'internet_ok':
+        phase = WifiPhase.internetOk;
+        break;
+      case 'saved':
+        phase = WifiPhase.saved;
+        break;
+      case 'connected':
+        phase = WifiPhase.connected;
+        break;
+      case 'failed':
+        phase = WifiPhase.failed;
+        break;
+      case 'disconnected':
+        phase = WifiPhase.disconnected;
+        break;
+      default:
+        phase = WifiPhase.idle;
+    }
+
+    state = state.copyWith(
+      phase: phase,
+      currentSsid: ssid,
+      ipAddress: ip,
+      rssi: rssi,
+      failureReason: reasonStr,
+      isScanning: phase == WifiPhase.scanning,
+    );
+    _log.i('WiFi Status updated: $stateStr (reason=$reasonStr, ip=$ip, rssi=$rssi)');
+  }
+
+  void handleIncomingNtpSynced(Map<String, dynamic> json) {
+    final epoch = (json['epoch'] as num?)?.toInt();
+    final tzMin = (json['tz_min'] as num?)?.toInt();
+    _log.i('Firmware confirmed NTP sync: epoch=$epoch, tz=$tzMin min');
+    state = state.copyWith(
+      phase: WifiPhase.connected,
+      lastNtpSyncEpoch: epoch,
+    );
+  }
+
+  Future<void> scanNetworks() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    state = state.copyWith(isScanning: true, scannedNetworks: []);
+    final settings = _ref.read(settingsProvider);
+    final pkt = LightPacketEncoder.encodeWifiScan();
+    try {
+      await client.writeWithoutResponse(
+        pkt,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      _log.i('Sent wifi_scan command');
+    } catch (e) {
+      _log.w('Failed to send wifi_scan: $e');
+      state = state.copyWith(isScanning: false);
+    }
+  }
+
+  Future<void> connect({
+    required String ssid,
+    required String psk,
+    bool save = true,
+  }) async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    state = state.copyWith(
+      phase: WifiPhase.connecting,
+      currentSsid: ssid,
+      failureReason: 'none',
+    );
+    final settings = _ref.read(settingsProvider);
+    final pkt = LightPacketEncoder.encodeWifiConnect(
+      ssid: ssid,
+      psk: psk,
+      save: save,
+    );
+    try {
+      await client.writeWithoutResponse(
+        pkt,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      _log.i('Sent wifi_connect command for $ssid');
+    } catch (e) {
+      _log.w('Failed to send wifi_connect: $e');
+      state = state.copyWith(phase: WifiPhase.failed, failureReason: e.toString());
+    }
+  }
+
+  Future<void> forget() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    final pkt = LightPacketEncoder.encodeWifiForget();
+    try {
+      await client.writeWithoutResponse(
+        pkt,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      state = WifiConnectionState.idle;
+      _log.i('Sent wifi_forget command');
+    } catch (e) {
+      _log.w('Failed to send wifi_forget: $e');
+    }
+  }
+
+  Future<void> requestStatus() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    final pkt = LightPacketEncoder.encodeWifiStatus();
+    try {
+      await client.writeWithoutResponse(
+        pkt,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      _log.i('Sent wifi_status query');
+    } catch (e) {
+      _log.w('Failed to send wifi_status: $e');
+    }
+  }
+
+  Future<void> triggerNtpSync() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    final pkt = LightPacketEncoder.encodeTriggerNtp();
+    try {
+      await client.writeWithoutResponse(
+        pkt,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      _log.i('Sent ntp_sync trigger command');
+    } catch (e) {
+      _log.w('Failed to send ntp_sync: $e');
+    }
+  }
+}
+
+final wifiProvider = StateNotifierProvider<WifiNotifier, WifiConnectionState>((ref) {
+  return WifiNotifier(ref);
 });
 
