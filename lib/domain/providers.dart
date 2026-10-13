@@ -104,7 +104,12 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
         state.map((d) => d.toJson()).toList(),
       );
 
-  Future<void> recordDevice({required String id, required String name}) async {
+  Future<void> recordDevice({
+    required String id,
+    required String name,
+    String? customAlias,
+    String? firmwareVersion,
+  }) async {
     final now = DateTime.now();
     final existing = state.firstWhere(
       (d) => d.id == id,
@@ -112,6 +117,12 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     );
     existing.name = name;
     existing.lastSeen = now;
+    if (customAlias != null && customAlias.trim().isNotEmpty) {
+      existing.customAlias = customAlias.trim();
+    }
+    if (firmwareVersion != null) {
+      existing.firmwareVersion = firmwareVersion;
+    }
 
     state = [
       existing,
@@ -119,8 +130,67 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     ];
 
     await _kv.putString(KvKeys.lastConnectedId, id);
-    await _kv.putString(KvKeys.lastConnectedName, name);
+    await _kv.putString(KvKeys.lastConnectedName, existing.displayName);
     await _persist();
+  }
+
+  Future<void> updateCustomAlias(String id, String alias) async {
+    final trimmed = alias.trim();
+    state = [
+      for (final d in state)
+        if (d.id == id)
+          d.copyWith(customAlias: trimmed.isEmpty ? null : trimmed)
+        else
+          d,
+    ];
+    await _persist();
+  }
+
+  Future<void> updateCachedState({
+    required String id,
+    String? name,
+    int? brightness,
+    int? mode,
+    bool? isOn,
+    int? r,
+    int? g,
+    int? b,
+    String? firmwareVersion,
+    int? ledCount,
+    int? maxCurrentMa,
+    int? transitionStyle,
+    int? ambientStyle,
+    int? ambientDepth,
+  }) async {
+    var matched = false;
+    state = [
+      for (final d in state)
+        if (d.id == id) ...[
+          (() {
+            matched = true;
+            return d.copyWith(
+              name: name ?? d.name,
+              lastSeen: DateTime.now(),
+              firmwareVersion: firmwareVersion ?? d.firmwareVersion,
+              cachedBrightness: brightness ?? d.cachedBrightness,
+              cachedMode: mode ?? d.cachedMode,
+              cachedIsOn: isOn ?? d.cachedIsOn,
+              cachedR: r ?? d.cachedR,
+              cachedG: g ?? d.cachedG,
+              cachedB: b ?? d.cachedB,
+              ledCount: ledCount ?? d.ledCount,
+              maxCurrentMa: maxCurrentMa ?? d.maxCurrentMa,
+              transitionStyle: transitionStyle ?? d.transitionStyle,
+              ambientStyle: ambientStyle ?? d.ambientStyle,
+              ambientDepth: ambientDepth ?? d.ambientDepth,
+            );
+          })()
+        ] else
+          d,
+    ];
+    if (matched) {
+      await _persist();
+    }
   }
 
   Future<void> remove(String id) async {
@@ -137,6 +207,18 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
 final pairedDevicesProvider =
     StateNotifierProvider<PairedDevicesNotifier, List<PairedDevice>>((ref) {
   return PairedDevicesNotifier(ref.watch(kvStoreProvider));
+});
+
+final activeDeviceProvider = Provider<PairedDevice?>((ref) {
+  final session = ref.watch(lightSessionProvider);
+  final pairedList = ref.watch(pairedDevicesProvider);
+  if (session.deviceId == null) return null;
+  return pairedList.where((d) => d.id == session.deviceId).firstOrNull ??
+      PairedDevice(
+        id: session.deviceId!,
+        name: session.deviceName ?? 'Temple Lights',
+        lastSeen: DateTime.now(),
+      );
 });
 
 // ============================================================================
@@ -315,6 +397,29 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
     unawaited(connect(device.id, name: device.name, epoch: epoch, rssi: device.rssi));
   }
 
+  Future<void> switchToDevice(String deviceId, {String? name}) async {
+    final pairedList = _ref.read(pairedDevicesProvider);
+    final targetDevice = pairedList.where((d) => d.id == deviceId).firstOrNull;
+    final resolvedName = name ?? targetDevice?.displayName ?? 'Temple Lights';
+
+    // 1. Immediately hydrate UI from cache so switching feels instant
+    if (targetDevice != null) {
+      _ref.read(lightControlProvider.notifier).hydrateFromCached(targetDevice);
+    }
+
+    // 2. Clear volatile per-device buffers
+    _ref.read(schedulesProvider.notifier).clearTransientState();
+    _ref.read(defaultModesProvider.notifier).clearTransientState();
+    _ref.read(logsProvider.notifier).clearTransientState();
+
+    // 3. Update active device in KV storage
+    await _kv.putString(KvKeys.lastConnectedId, deviceId);
+    await _kv.putString(KvKeys.lastConnectedName, resolvedName);
+
+    // 4. Connect to target device
+    await connect(deviceId, name: resolvedName);
+  }
+
   Future<void> connect(String deviceId, {String? name, int? epoch, int? rssi}) async {
     final currentEpoch = epoch ?? ++_sessionEpoch;
     _autoConnectDebounce?.cancel();
@@ -399,6 +504,15 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                 g: g,
                 b: bl,
               );
+          _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+                id: deviceId,
+                brightness: b,
+                mode: m,
+                isOn: b > 0,
+                r: r,
+                g: g,
+                b: bl,
+              );
           return;
         }
 
@@ -417,6 +531,12 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               final g = json['g'] as int? ?? 147;
               final bl = json['b'] as int? ?? 41;
               final ver = json['ver'] as String?;
+              final hwName = json['name'] as String?;
+              final leds = (json['leds'] as num?)?.toInt();
+              final maxMa = (json['max_ma'] as num?)?.toInt();
+              final trans = (json['trans'] as num?)?.toInt();
+              final amb = (json['amb'] as num?)?.toInt();
+              final depth = (json['depth'] as num?)?.toInt();
               _ref.read(lightControlProvider.notifier).updateFromHardware(
                     mode: m,
                     brightness: b,
@@ -424,6 +544,27 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     g: g,
                     b: bl,
                     firmwareVersion: ver,
+                    ledCount: leds,
+                    maxCurrentMa: maxMa,
+                    transitionStyle: trans,
+                    ambientStyle: amb,
+                    ambientDepth: depth,
+                  );
+              _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+                    id: deviceId,
+                    name: hwName,
+                    brightness: b,
+                    mode: m,
+                    isOn: b > 0,
+                    r: r,
+                    g: g,
+                    b: bl,
+                    firmwareVersion: ver,
+                    ledCount: leds,
+                    maxCurrentMa: maxMa,
+                    transitionStyle: trans,
+                    ambientStyle: amb,
+                    ambientDepth: depth,
                   );
             } else if (type == 'ota_ack') {
               _ref.read(otaProgressProvider.notifier).handleOtaAck(json);
@@ -816,6 +957,11 @@ class LightControlNotifier extends StateNotifier<LightState> {
     required int g,
     required int b,
     String? firmwareVersion,
+    int? ledCount,
+    int? maxCurrentMa,
+    int? transitionStyle,
+    int? ambientStyle,
+    int? ambientDepth,
   }) {
     // If the user recently changed brightness/mode locally (within last 1500ms),
     // ignore stale incoming hardware echo to prevent slider jitter or jumping
@@ -834,11 +980,144 @@ class LightControlNotifier extends StateNotifier<LightState> {
       isOn: isOn,
       lastToggled: isRecentLocal ? state.lastToggled : DateTime.now(),
       firmwareVersion: firmwareVersion ?? state.firmwareVersion,
+      ledCount: ledCount ?? state.ledCount,
+      maxCurrentMa: maxCurrentMa ?? state.maxCurrentMa,
+      transitionStyle: transitionStyle ?? state.transitionStyle,
+      ambientStyle: ambientStyle ?? state.ambientStyle,
+      ambientDepth: ambientDepth ?? state.ambientDepth,
     );
     if (!isOn) {
       _ref.read(autoOffTimerProvider.notifier).onLightsSwitchedOff();
     }
-    _log.i('Lights state updated from hardware: mode=$mode, bright=$brightness, RGB=($r,$g,$b), ver=${firmwareVersion ?? state.firmwareVersion}');
+    _log.i('Lights state updated from hardware: mode=$mode, bright=$brightness, leds=${ledCount ?? state.ledCount}, trans=${transitionStyle ?? state.transitionStyle}, amb=${ambientStyle ?? state.ambientStyle}');
+  }
+
+  void hydrateFromCached(PairedDevice dev) {
+    state = LightState(
+      isOn: dev.cachedIsOn ?? (dev.cachedBrightness != null ? dev.cachedBrightness! > 0 : true),
+      brightness: dev.cachedBrightness ?? 255,
+      mode: dev.cachedMode ?? 0,
+      r: dev.cachedR ?? 255,
+      g: dev.cachedG ?? 147,
+      b: dev.cachedB ?? 41,
+      firmwareVersion: dev.firmwareVersion,
+      ledCount: dev.effectiveLedCount,
+      maxCurrentMa: dev.effectiveMaxCurrentMa,
+      transitionStyle: dev.effectiveTransitionStyle,
+      ambientStyle: dev.effectiveAmbientStyle,
+      ambientDepth: dev.effectiveAmbientDepth,
+    );
+  }
+
+  Future<void> setHardwareConfig({required int leds, required int maxCurrentMa}) async {
+    final client = _ref.read(bleClientProvider);
+    state = state.copyWith(ledCount: leds, maxCurrentMa: maxCurrentMa);
+    if (client.deviceId != null) {
+      await _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+            id: client.deviceId!,
+            ledCount: leds,
+            maxCurrentMa: maxCurrentMa,
+          );
+    }
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeSetHwConfig(leds: leds, maxCurrentMa: maxCurrentMa);
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched set_hw_config leds=$leds max_ma=$maxCurrentMa to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch set_hw_config: $e');
+    }
+  }
+
+  Future<void> setAnimationConfig({
+    required int transitionStyle,
+    required int ambientStyle,
+    int depth = 6,
+  }) async {
+    final client = _ref.read(bleClientProvider);
+    state = state.copyWith(
+      transitionStyle: transitionStyle,
+      ambientStyle: ambientStyle,
+      ambientDepth: depth,
+    );
+    if (client.deviceId != null) {
+      await _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+            id: client.deviceId!,
+            transitionStyle: transitionStyle,
+            ambientStyle: ambientStyle,
+            ambientDepth: depth,
+          );
+    }
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeSetAnimConfig(
+      transitionStyle: transitionStyle,
+      ambientStyle: ambientStyle,
+      depth: depth,
+    );
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched set_anim_config trans=$transitionStyle amb=$ambientStyle depth=$depth% to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch set_anim_config: $e');
+    }
+  }
+
+  Future<void> triggerHwTest() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeHwTest();
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched hw_test to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch hw_test: $e');
+    }
+  }
+
+  Future<void> setDeviceName(String name) async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeSetName(name);
+    try {
+      await _dispatchPacket(pkt);
+      if (client.deviceId != null) {
+        await _ref.read(pairedDevicesProvider.notifier).recordDevice(
+              id: client.deviceId!,
+              name: name,
+              customAlias: name,
+            );
+      }
+      _log.i('Dispatched set_name "$name" to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch set_name: $e');
+    }
+  }
+
+  Future<void> resetDeviceName() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeResetName();
+    try {
+      await _dispatchPacket(pkt);
+      if (client.deviceId != null) {
+        await _ref.read(pairedDevicesProvider.notifier).updateCustomAlias(client.deviceId!, '');
+      }
+      _log.i('Dispatched reset_name to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch reset_name: $e');
+    }
+  }
+
+  Future<void> identifyDevice() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeIdentify();
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched identify / blink command to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch identify: $e');
+    }
   }
 
   Future<void> _dispatchFast(Uint8List packet) async {
@@ -914,6 +1193,11 @@ class ScheduleNotifier extends StateNotifier<List<LightSchedule>> {
     } else {
       state = const [];
     }
+  }
+
+  void clearTransientState() {
+    _incomingSchedulesBuffer.clear();
+    state = const [];
   }
 
   Future<void> onDeviceConnected() async {
@@ -1379,6 +1663,11 @@ class LogsNotifier extends StateNotifier<List<LightLogEntry>> {
     }
   }
 
+  void clearTransientState() {
+    _incomingLogsBuffer.clear();
+    state = const [];
+  }
+
   Future<void> _persist() async {
     await _kv.putJson(
       'saved_logs_v1',
@@ -1772,6 +2061,11 @@ class DefaultModesNotifier extends StateNotifier<List<DefaultModeConfig>> {
 
   void _persist() {
     unawaited(_kv.putJson(KvKeys.savedModes, state.map((m) => m.toJson()).toList()));
+  }
+
+  void clearTransientState() {
+    _incomingBuffer.clear();
+    state = DefaultModeConfig.factoryDefaults;
   }
 
   Future<void> onDeviceConnected() async {

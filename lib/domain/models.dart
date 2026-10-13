@@ -85,6 +85,11 @@ class LightState {
     this.isSending = false,
     this.lastToggled,
     this.firmwareVersion,
+    this.ledCount = 150,
+    this.maxCurrentMa = 3000,
+    this.transitionStyle = 0,
+    this.ambientStyle = 1,
+    this.ambientDepth = 6,
   });
 
   final bool isOn;
@@ -94,21 +99,57 @@ class LightState {
   final bool isSending;
   final DateTime? lastToggled;
   final String? firmwareVersion;
+  final int ledCount;
+  final int maxCurrentMa;
+  final int transitionStyle; // 0=Center-Out, 1=Linear Sweep, 2=Instant Fade
+  final int ambientStyle;    // 0=Solid Still, 1=Gentle Breathing, 2=Diya Candle
+  final int ambientDepth;
 
   bool get isOff => !isOn || brightness == 0;
 
+  double get stripLengthMeters => ledCount / 60.0;
+  String get formattedLength => '${stripLengthMeters.toStringAsFixed(1)}m';
+
   String get modeName {
+    final len = formattedLength;
+    final centerLen = (stripLengthMeters * 0.6).toStringAsFixed(1);
     switch (mode) {
       case 0:
-        return 'Warm White (All 2.5m)';
+        return 'Warm White (All $len)';
       case 1:
-        return 'Warm White (Center 1.5m)';
+        return 'Warm White (Center ${centerLen}m)';
       case 2:
-        return 'Pure White (All 2.5m)';
+        return 'Pure White (All $len)';
       case 3:
         return 'Custom RGB';
       default:
         return 'Mode $mode';
+    }
+  }
+
+  String get transitionStyleName {
+    switch (transitionStyle) {
+      case 0:
+        return 'Center-Out Dawn';
+      case 1:
+        return 'Sunrise Flow';
+      case 2:
+        return 'Uniform Smooth Fade';
+      default:
+        return 'Center-Out Dawn';
+    }
+  }
+
+  String get ambientStyleName {
+    switch (ambientStyle) {
+      case 0:
+        return 'Pure Solid';
+      case 1:
+        return 'Gentle Breathing';
+      case 2:
+        return 'Diya Candle Flutter';
+      default:
+        return 'Gentle Breathing';
     }
   }
 
@@ -122,6 +163,11 @@ class LightState {
     bool? isSending,
     DateTime? lastToggled,
     String? firmwareVersion,
+    int? ledCount,
+    int? maxCurrentMa,
+    int? transitionStyle,
+    int? ambientStyle,
+    int? ambientDepth,
   }) =>
       LightState(
         isOn: isOn ?? this.isOn,
@@ -133,6 +179,11 @@ class LightState {
         isSending: isSending ?? this.isSending,
         lastToggled: lastToggled ?? this.lastToggled,
         firmwareVersion: firmwareVersion ?? this.firmwareVersion,
+        ledCount: ledCount ?? this.ledCount,
+        maxCurrentMa: maxCurrentMa ?? this.maxCurrentMa,
+        transitionStyle: transitionStyle ?? this.transitionStyle,
+        ambientStyle: ambientStyle ?? this.ambientStyle,
+        ambientDepth: ambientDepth ?? this.ambientDepth,
       );
 
   static const idle = LightState();
@@ -295,22 +346,127 @@ class PairedDevice {
     required this.id,
     required this.name,
     required this.lastSeen,
+    this.customAlias,
+    this.firmwareVersion,
+    this.cachedBrightness,
+    this.cachedMode,
+    this.cachedIsOn,
+    this.cachedR,
+    this.cachedG,
+    this.cachedB,
+    this.ledCount,
+    this.maxCurrentMa,
+    this.transitionStyle,
+    this.ambientStyle,
+    this.ambientDepth,
   });
 
   final String id;
   String name;
   DateTime lastSeen;
+  String? customAlias;
+  String? firmwareVersion;
+  int? cachedBrightness;
+  int? cachedMode;
+  bool? cachedIsOn;
+  int? cachedR;
+  int? cachedG;
+  int? cachedB;
+  int? ledCount;
+  int? maxCurrentMa;
+  int? transitionStyle;
+  int? ambientStyle;
+  int? ambientDepth;
+
+  String get displayName =>
+      (customAlias != null && customAlias!.trim().isNotEmpty)
+          ? customAlias!.trim()
+          : name;
+
+  bool get isOff => cachedIsOn == false || (cachedBrightness != null && cachedBrightness == 0);
+
+  int get effectiveLedCount => ledCount ?? 150;
+  int get effectiveMaxCurrentMa => maxCurrentMa ?? 3000;
+  int get effectiveTransitionStyle => transitionStyle ?? 0;
+  int get effectiveAmbientStyle => ambientStyle ?? 1;
+  int get effectiveAmbientDepth => ambientDepth ?? 6;
+
+  double get stripLengthMeters => effectiveLedCount / 60.0;
+  String get formattedLength => '${stripLengthMeters.toStringAsFixed(1)}m';
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'lastSeen': lastSeen.toIso8601String(),
+        'customAlias': customAlias,
+        'firmwareVersion': firmwareVersion,
+        'cachedBrightness': cachedBrightness,
+        'cachedMode': cachedMode,
+        'cachedIsOn': cachedIsOn,
+        'cachedR': cachedR,
+        'cachedG': cachedG,
+        'cachedB': cachedB,
+        'ledCount': ledCount,
+        'maxCurrentMa': maxCurrentMa,
+        'transitionStyle': transitionStyle,
+        'ambientStyle': ambientStyle,
+        'ambientDepth': ambientDepth,
       };
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
         id: json['id'] as String,
         name: json['name'] as String? ?? 'Temple Lights',
         lastSeen: DateTime.tryParse(json['lastSeen'] as String? ?? '') ?? DateTime.now(),
+        customAlias: json['customAlias'] as String?,
+        firmwareVersion: json['firmwareVersion'] as String?,
+        cachedBrightness: json['cachedBrightness'] as int?,
+        cachedMode: json['cachedMode'] as int?,
+        cachedIsOn: json['cachedIsOn'] as bool?,
+        cachedR: json['cachedR'] as int?,
+        cachedG: json['cachedG'] as int?,
+        cachedB: json['cachedB'] as int?,
+        ledCount: (json['ledCount'] as num?)?.toInt(),
+        maxCurrentMa: (json['maxCurrentMa'] as num?)?.toInt(),
+        transitionStyle: (json['transitionStyle'] as num?)?.toInt(),
+        ambientStyle: (json['ambientStyle'] as num?)?.toInt(),
+        ambientDepth: (json['ambientDepth'] as num?)?.toInt(),
+      );
+
+  PairedDevice copyWith({
+    String? id,
+    String? name,
+    DateTime? lastSeen,
+    String? customAlias,
+    String? firmwareVersion,
+    int? cachedBrightness,
+    int? cachedMode,
+    bool? cachedIsOn,
+    int? cachedR,
+    int? cachedG,
+    int? cachedB,
+    int? ledCount,
+    int? maxCurrentMa,
+    int? transitionStyle,
+    int? ambientStyle,
+    int? ambientDepth,
+  }) =>
+      PairedDevice(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        lastSeen: lastSeen ?? this.lastSeen,
+        customAlias: customAlias ?? this.customAlias,
+        firmwareVersion: firmwareVersion ?? this.firmwareVersion,
+        cachedBrightness: cachedBrightness ?? this.cachedBrightness,
+        cachedMode: cachedMode ?? this.cachedMode,
+        cachedIsOn: cachedIsOn ?? this.cachedIsOn,
+        cachedR: cachedR ?? this.cachedR,
+        cachedG: cachedG ?? this.cachedG,
+        cachedB: cachedB ?? this.cachedB,
+        ledCount: ledCount ?? this.ledCount,
+        maxCurrentMa: maxCurrentMa ?? this.maxCurrentMa,
+        transitionStyle: transitionStyle ?? this.transitionStyle,
+        ambientStyle: ambientStyle ?? this.ambientStyle,
+        ambientDepth: ambientDepth ?? this.ambientDepth,
       );
 }
 

@@ -6,6 +6,8 @@ import '../../domain/providers.dart';
 import '../../ui/theme.dart';
 import '../ota/ota_update_screen.dart';
 import '../wifi/wifi_setup_sheet.dart';
+import 'animation_picker_sheet.dart';
+import 'hardware_setup_sheet.dart';
 
 /// Settings modal sheet to adjust UUIDs, payload formats, auto-connect, and view logs.
 class SettingsSheet extends ConsumerStatefulWidget {
@@ -396,6 +398,138 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                 ),
                 const SizedBox(height: 20),
 
+                // LED Strip Length & Power Card
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceRaised,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.amber.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.linear_scale_rounded, size: 20, color: AppTheme.amber),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('LED Strip & Power Safety', style: AppTheme.heading(size: 15)),
+                                const SizedBox(height: 2),
+                                Consumer(
+                                  builder: (context, ref, _) {
+                                    final light = ref.watch(lightControlProvider);
+                                    return Text(
+                                      '${light.ledCount} LEDs (${light.formattedLength}) • Safety: ${light.maxCurrentMa}mA',
+                                      style: AppTheme.mono(size: 11, color: AppTheme.textSecondary),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.tune_rounded, size: 18, color: Colors.white),
+                          label: Text('Calibrate Strip & Power', style: AppTheme.heading(size: 13, color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.amber,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 1,
+                          ),
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            HardwareSetupSheet.show(context);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Devotional Animations & Living Aura Card
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceRaised,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.gold.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.auto_awesome_rounded, size: 20, color: AppTheme.gold),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Devotional Animations & Aura', style: AppTheme.heading(size: 15)),
+                                const SizedBox(height: 2),
+                                Consumer(
+                                  builder: (context, ref, _) {
+                                    final light = ref.watch(lightControlProvider);
+                                    return Text(
+                                      '${light.transitionStyleName} • ${light.ambientStyleName}',
+                                      style: AppTheme.mono(size: 11, color: AppTheme.textSecondary),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.palette_rounded, size: 18, color: Colors.black),
+                          label: Text('Customize Motion & Living Aura', style: AppTheme.heading(size: 13, color: Colors.black)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.gold,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 1,
+                          ),
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            AnimationPickerSheet.show(context);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
                 // Firmware & OTA Update Card
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -427,9 +561,11 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                 Consumer(
                                   builder: (context, ref, _) {
                                     final light = ref.watch(lightControlProvider);
+                                    final activeDev = ref.watch(activeDeviceProvider);
                                     final devVer = light.firmwareVersion != null ? 'v${light.firmwareVersion}' : 'v1.0.0';
+                                    final targetName = activeDev?.displayName ?? 'Active Light';
                                     return Text(
-                                      'Device: $devVer • Bundled: v${LightBleUuids.bundledFirmwareVersion}',
+                                      '$targetName: $devVer • Bundled: v${LightBleUuids.bundledFirmwareVersion}',
                                       style: AppTheme.mono(size: 11, color: AppTheme.textSecondary),
                                     );
                                   },

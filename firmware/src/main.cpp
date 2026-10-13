@@ -13,7 +13,15 @@
 // HARDWARE & ANIMATION CONFIG
 // ============================================================================
 #define LED_PIN                   4
-#define NUM_LEDS                  150   // 2.5m × 60 LEDs/m
+#define MAX_LEDS                  600   // Max buffer capacity (up to 10m @ 60 LEDs/m)
+#define DEFAULT_NUM_LEDS          150   // 2.5m × 60 LEDs/m default
+
+// Global runtime hardware & animation settings (persisted in NVS "tl")
+static uint16_t numLeds = DEFAULT_NUM_LEDS;
+static uint16_t maxCurrentMa = 3000;    // 3A default safety budget
+static uint8_t transitionStyle = 0;    // 0=Center-Out, 1=Linear Sweep, 2=Instant Fade
+static uint8_t ambientStyle = 1;       // 0=Solid, 1=Breathing, 2=Diya Flicker
+static uint8_t ambientDepth = 6;       // 6% depth
 
 #define ANIM_ON_DURATION_MS       1000   // Center-out ON total duration
 #define ANIM_ON_PROP_MS            650   // Propagation time from center to ends
@@ -27,7 +35,6 @@
 #define ANIM_CROSSFADE_PROP_MS     650   // Center-out wave propagation for mode switch
 #define ANIM_CROSSFADE_FADE_MS     350   // Per-LED smootherstep blend duration
 #define ANIM_BREATHING_PERIOD_MS  3000   // Gentle idle breathing cycle
-#define ANIM_BREATHING_DEPTH      0.06f  // 6% subtle breathing depth (0.94 - 1.00)
 #define ANIM_FRAME_MS               20   // ~50 FPS target frame timing
 
 #define MAX_SCHEDULES             16
@@ -36,8 +43,12 @@
 // ============================================================================
 // BLE & FIRMWARE CONFIG
 // ============================================================================
-#define FIRMWARE_VERSION    "1.2.0"
-#define DEVICE_NAME         "Temple Lights"
+#define FIRMWARE_VERSION    "1.3.0"
+#define DEFAULT_DEVICE_NAME "Temple Lights"
+
+static char defaultDeviceName[32] = DEFAULT_DEVICE_NAME;
+static char activeDeviceName[36] = DEFAULT_DEVICE_NAME;
+static char macSuffixStr[8] = "";
 
 // Primary Service & Control Characteristic (Matched to hardware 95d6fedc-cac3-48e2-8221-f534a2782704)
 #define SERVICE_UUID            "95d6fedc-cac3-48e2-8221-f534a2782704"
@@ -140,7 +151,9 @@ enum AnimType {
     ANIM_NONE = 0,
     ANIM_CENTER_ON,
     ANIM_CENTER_OFF,
-    ANIM_CROSSFADE
+    ANIM_CROSSFADE,
+    ANIM_IDENTIFY,
+    ANIM_HW_TEST
 };
 
 static uint8_t currentMode = 0;       // 0=warm all, 1=warm middle, 2=white all, 3=custom RGB
@@ -151,10 +164,10 @@ static uint8_t activeBrightness = 255; // Preserved brightness for ON transition
 static float currentBrightness = 255.0f; // Slew-interpolated brightness for hardware output
 static uint8_t targetBrightness = 255;
 
-static RgbColor currentLeds[NUM_LEDS];
-static RgbColor startLeds[NUM_LEDS];
-static RgbColor targetLeds[NUM_LEDS];
-static RgbColor renderedLeds[NUM_LEDS];
+static RgbColor currentLeds[MAX_LEDS];
+static RgbColor startLeds[MAX_LEDS];
+static RgbColor targetLeds[MAX_LEDS];
+static RgbColor renderedLeds[MAX_LEDS];
 
 static AnimType currentAnim = ANIM_NONE;
 static unsigned long animStartMs = 0;
@@ -162,7 +175,7 @@ static unsigned long animDurationMs = 0;
 static unsigned long lastAnimFrameMs = 0;
 static unsigned long breathingBaseMs = 0;
 
-static Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+static Adafruit_NeoPixel strip(MAX_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 static Preferences prefs;
 
 // BLE runtime
@@ -233,14 +246,16 @@ static const uint8_t WARM_R = 255, WARM_G = 147, WARM_B = 41;
 static const uint8_t WHITE_R = 255, WHITE_G = 255, WHITE_B = 255;
 
 // Forward declarations
-float get_normalized_center_dist(int i, int totalLeds = NUM_LEDS);
+float get_normalized_center_dist(int i, int totalLeds);
+float get_normalized_spatial_dist(int i, int totalLeds);
 float ease_smootherstep(float t);
-float get_breathing_factor(unsigned long now);
+float get_ambient_factor(unsigned long now);
 void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbColor* out);
 void render_frame(unsigned long now);
 void start_center_on_animation();
 void start_center_off_animation();
 void start_crossfade_animation();
+void start_hw_test_animation();
 void update_animation(unsigned long now);
 void notify_state();
 void record_light_log(bool isOn, const char* source = "BLE App");
@@ -255,9 +270,12 @@ void load_modes_from_nvs();
 void reset_modes_to_defaults();
 void send_modes_hydration_to_app();
 void evaluate_schedules();
+void save_hw_config();
+void save_anim_config();
+void load_hw_and_anim_config();
 
 // ============================================================================
-// NVS PERSISTENCE FOR STATE
+// NVS PERSISTENCE FOR STATE & HARDWARE
 // ============================================================================
 void save_state() {
     prefs.begin("tl", false);
@@ -267,6 +285,41 @@ void save_state() {
     prefs.putUChar("g", customG);
     prefs.putUChar("b", customB);
     prefs.end();
+}
+
+void save_hw_config() {
+    prefs.begin("tl", false);
+    prefs.putUShort("leds", numLeds);
+    prefs.putUShort("max_ma", maxCurrentMa);
+    prefs.end();
+}
+
+void save_anim_config() {
+    prefs.begin("tl", false);
+    prefs.putUChar("trans_st", transitionStyle);
+    prefs.putUChar("amb_st", ambientStyle);
+    prefs.putUChar("amb_dp", ambientDepth);
+    prefs.end();
+}
+
+void load_hw_and_anim_config() {
+    prefs.begin("tl", true);
+    numLeds         = prefs.getUShort("leds", DEFAULT_NUM_LEDS);
+    maxCurrentMa    = prefs.getUShort("max_ma", 3000);
+    transitionStyle = prefs.getUChar("trans_st", 0);
+    ambientStyle    = prefs.getUChar("amb_st", 1);
+    ambientDepth    = prefs.getUChar("amb_dp", 6);
+    prefs.end();
+
+    if (numLeds == 0 || numLeds > MAX_LEDS) numLeds = DEFAULT_NUM_LEDS;
+    if (maxCurrentMa == 0) maxCurrentMa = 3000;
+    if (transitionStyle > 2) transitionStyle = 0;
+    if (ambientStyle > 2) ambientStyle = 1;
+    if (ambientDepth == 0 || ambientDepth > 30) ambientDepth = 6;
+
+    strip.updateLength(numLeds);
+    Serial.printf("[NVS] Loaded HW Config: %d LEDs, Max %d mA | Anim: trans=%d, amb=%d, depth=%d%%\n",
+                  numLeds, maxCurrentMa, transitionStyle, ambientStyle, ambientDepth);
 }
 
 void load_state() {
@@ -479,40 +532,76 @@ float ease_smootherstep(float t) {
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
-float get_breathing_factor(unsigned long now) {
-    unsigned long elapsed = now - breathingBaseMs;
-    float phase = (float)(elapsed % ANIM_BREATHING_PERIOD_MS) * (2.0f * 3.14159265f / (float)ANIM_BREATHING_PERIOD_MS);
-    return 1.0f - (ANIM_BREATHING_DEPTH * 0.5f * (1.0f - cosf(phase)));
+float get_normalized_spatial_dist(int i, int totalLeds) {
+    if (transitionStyle == 1) {
+        // Linear Sweep (Sunrise Flow from one end to another)
+        return (totalLeds <= 1) ? 0.0f : ((float)i / (float)(totalLeds - 1));
+    } else if (transitionStyle == 2) {
+        // Instant Smooth Fade (all LEDs simultaneously fade without wave delay)
+        return 0.0f;
+    } else {
+        // Default (0): Center-Out Dawn
+        return get_normalized_center_dist(i, totalLeds);
+    }
+}
+
+static float diyaCurrentFactor = 1.0f;
+static float diyaTargetFactor = 1.0f;
+static unsigned long lastDiyaUpdateMs = 0;
+
+float get_ambient_factor(unsigned long now) {
+    if (ambientStyle == 0) return 1.0f; // Static Solid
+
+    if (ambientStyle == 1) { // Gentle Breathing
+        unsigned long elapsed = now - breathingBaseMs;
+        float phase = (float)(elapsed % ANIM_BREATHING_PERIOD_MS) * (2.0f * 3.14159265f / (float)ANIM_BREATHING_PERIOD_MS);
+        float depth = (float)ambientDepth / 100.0f;
+        return 1.0f - (depth * 0.5f * (1.0f - cosf(phase)));
+    }
+
+    if (ambientStyle == 2) { // Sacred Diya / Candle Flame Flutter
+        if (now - lastDiyaUpdateMs >= 60) {
+            lastDiyaUpdateMs = now;
+            float depth = (float)ambientDepth / 100.0f;
+            float rnd = (float)(esp_random() % 1000) / 1000.0f;
+            diyaTargetFactor = 1.0f - (depth * rnd);
+        }
+        // Smooth exponential moving average low-pass filter (25% per 20ms frame)
+        diyaCurrentFactor += (diyaTargetFactor - diyaCurrentFactor) * 0.25f;
+        return diyaCurrentFactor;
+    }
+
+    return 1.0f;
 }
 
 void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbColor* out) {
-    int midStart = (int)((NUM_LEDS * 0.20f) + 0.5f);
-    int midEnd   = NUM_LEDS - 1 - midStart;
+    int midStart = (int)((numLeds * 0.20f) + 0.5f);
+    int midEnd   = numLeds - 1 - midStart;
 
     if (mode < 3) {
         const ModeConfig& cfg = defaultModes[mode];
-        if (cfg.style == 1) { // Center focus 1.5m (90 LEDs), ends off
-            for (int i = 0; i < NUM_LEDS; i++) {
+        if (cfg.style == 1) { // Center focus (60% active center, ends off)
+            for (int i = 0; i < numLeds; i++) {
                 if (i >= midStart && i <= midEnd)
                     out[i] = { cfg.r, cfg.g, cfg.b };
                 else
                     out[i] = { 0, 0, 0 };
             }
-        } else { // Full strip (2.5m, 150 LEDs)
-            for (int i = 0; i < NUM_LEDS; i++) {
+        } else { // Full strip
+            for (int i = 0; i < numLeds; i++) {
                 out[i] = { cfg.r, cfg.g, cfg.b };
             }
         }
         return;
     }
 
-    if (mode == 3) { // Mode 3: custom RGB (2.5m)
-        for (int i = 0; i < NUM_LEDS; i++)
+    if (mode == 3) { // Mode 3: custom RGB
+        for (int i = 0; i < numLeds; i++)
             out[i] = { r, g, b };
         return;
     }
 
-    for (int i = 0; i < NUM_LEDS; i++)
+    for (int i = 0; i < numLeds; i++)
         out[i] = { WARM_R, WARM_G, WARM_B };
 }
 
@@ -520,7 +609,7 @@ void render_frame(unsigned long now) {
     if (brightness == 0 && currentAnim == ANIM_NONE && currentBrightness <= 0.01f) {
         strip.clear();
         strip.show();
-        for (int i = 0; i < NUM_LEDS; i++) {
+        for (int i = 0; i < numLeds; i++) {
             renderedLeds[i] = { 0, 0, 0 };
         }
         return;
@@ -528,10 +617,9 @@ void render_frame(unsigned long now) {
 
     float bFactor = 1.0f;
     if (currentAnim == ANIM_NONE && brightness > 0) {
-        bFactor = get_breathing_factor(now);
+        bFactor = get_ambient_factor(now);
     } else if (currentAnim == ANIM_CROSSFADE) {
-        // Continuous gentle breathing during crossfade ensures zero brightness popping
-        bFactor = get_breathing_factor(now);
+        bFactor = get_ambient_factor(now);
     }
 
     float effBright = currentBrightness * bFactor;
@@ -539,12 +627,38 @@ void render_frame(unsigned long now) {
     if (effBright > 255.0f) effBright = 255.0f;
     float brightMult = effBright / 255.0f;
 
-    for (int i = 0; i < NUM_LEDS; i++) {
+    // Adaptive Software Current Limiter (PSU Brownout Protection)
+    if (maxCurrentMa > 0 && brightMult > 0.01f) {
+        uint32_t sumRgb = 0;
+        for (int i = 0; i < numLeds; i++) {
+            sumRgb += currentLeds[i].r + currentLeds[i].g + currentLeds[i].b;
+        }
+        // Base system: ~120mA (ESP32 CPU + BLE radio) + 1mA quiescent per WS2812B IC
+        float baseMa = 120.0f + (float)numLeds * 1.0f;
+        // Peak LED consumption: 50mA per LED at full RGB white
+        float ledFullMa = ((float)sumRgb / ((float)numLeds * 3.0f * 255.0f)) * ((float)numLeds * 50.0f);
+        float estTotalMa = baseMa + (ledFullMa * brightMult);
+
+        if (estTotalMa > (float)maxCurrentMa) {
+            float availableForLeds = (float)maxCurrentMa - baseMa;
+            if (availableForLeds < 50.0f) availableForLeds = 50.0f;
+            float safetyMult = availableForLeds / (ledFullMa * brightMult);
+            if (safetyMult < 1.0f) {
+                brightMult *= safetyMult;
+            }
+        }
+    }
+
+    for (int i = 0; i < numLeds; i++) {
         uint8_t r = (uint8_t)(currentLeds[i].r * brightMult + 0.5f);
         uint8_t g = (uint8_t)(currentLeds[i].g * brightMult + 0.5f);
         uint8_t b = (uint8_t)(currentLeds[i].b * brightMult + 0.5f);
         renderedLeds[i] = { r, g, b };
         strip.setPixelColor(i, r, g, b);
+    }
+    // Clear any extra pixels if previously longer
+    for (int i = numLeds; i < MAX_LEDS; i++) {
+        strip.setPixelColor(i, 0, 0, 0);
     }
     strip.show();
 }
@@ -560,7 +674,7 @@ void start_center_on_animation() {
     compute_target_colors(currentMode, customR, customG, customB, targetLeds);
 
     // If strip was previously dark, startLeds will be black; if already illuminated, it blends seamlessly
-    for (int i = 0; i < NUM_LEDS; i++) {
+    for (int i = 0; i < numLeds; i++) {
         startLeds[i] = currentLeds[i];
     }
 
@@ -575,7 +689,7 @@ void start_center_off_animation() {
     brightness = 0;
 
     // Preserve true unscaled base colors so fade collapse is physically consistent
-    for (int i = 0; i < NUM_LEDS; i++) {
+    for (int i = 0; i < numLeds; i++) {
         startLeds[i] = currentLeds[i];
         targetLeds[i] = { 0, 0, 0 };
     }
@@ -595,13 +709,25 @@ void start_crossfade_animation() {
 
     compute_target_colors(currentMode, customR, customG, customB, targetLeds);
 
-    for (int i = 0; i < NUM_LEDS; i++) {
+    for (int i = 0; i < numLeds; i++) {
         startLeds[i] = currentLeds[i];
     }
 
     currentAnim = ANIM_CROSSFADE;
     animStartMs = millis();
     animDurationMs = ANIM_CROSSFADE_MS;
+}
+
+void start_identify_animation() {
+    currentAnim = ANIM_IDENTIFY;
+    animStartMs = millis();
+    animDurationMs = 1500;
+}
+
+void start_hw_test_animation() {
+    currentAnim = ANIM_HW_TEST;
+    animStartMs = millis();
+    animDurationMs = 3500;
 }
 
 void update_animation(unsigned long now) {
@@ -612,8 +738,8 @@ void update_animation(unsigned long now) {
         unsigned long elapsed = now - animStartMs;
         bool finished = (elapsed >= animDurationMs);
 
-        for (int i = 0; i < NUM_LEDS; i++) {
-            float dNorm = get_normalized_center_dist(i);
+        for (int i = 0; i < numLeds; i++) {
+            float dNorm = get_normalized_spatial_dist(i, numLeds);
             float startT = dNorm * (float)ANIM_CROSSFADE_PROP_MS;
 
             if (finished || (float)elapsed >= startT + (float)ANIM_CROSSFADE_FADE_MS) {
@@ -638,7 +764,7 @@ void update_animation(unsigned long now) {
         }
 
         if (finished) {
-            for (int i = 0; i < NUM_LEDS; i++) {
+            for (int i = 0; i < numLeds; i++) {
                 currentLeds[i] = targetLeds[i];
             }
             currentAnim = ANIM_NONE;
@@ -648,8 +774,8 @@ void update_animation(unsigned long now) {
         unsigned long elapsed = now - animStartMs;
         bool finished = (elapsed >= animDurationMs);
 
-        for (int i = 0; i < NUM_LEDS; i++) {
-            float dNorm = get_normalized_center_dist(i);
+        for (int i = 0; i < numLeds; i++) {
+            float dNorm = get_normalized_spatial_dist(i, numLeds);
             float startT = dNorm * (float)ANIM_ON_PROP_MS;
 
             if (finished || (float)elapsed >= startT + (float)ANIM_ON_FADE_MS) {
@@ -667,7 +793,7 @@ void update_animation(unsigned long now) {
         }
 
         if (finished) {
-            for (int i = 0; i < NUM_LEDS; i++) {
+            for (int i = 0; i < numLeds; i++) {
                 currentLeds[i] = targetLeds[i];
             }
             currentAnim = ANIM_NONE;
@@ -678,8 +804,8 @@ void update_animation(unsigned long now) {
         unsigned long elapsed = now - animStartMs;
         bool finished = (elapsed >= animDurationMs);
 
-        for (int i = 0; i < NUM_LEDS; i++) {
-            float dNorm = get_normalized_center_dist(i);
+        for (int i = 0; i < numLeds; i++) {
+            float dNorm = get_normalized_spatial_dist(i, numLeds);
             float startT = dNorm * (float)ANIM_OFF_PROP_MS;
 
             if (finished || (float)elapsed >= startT + (float)ANIM_OFF_FADE_MS) {
@@ -698,7 +824,7 @@ void update_animation(unsigned long now) {
         }
 
         if (finished) {
-            for (int i = 0; i < NUM_LEDS; i++) {
+            for (int i = 0; i < numLeds; i++) {
                 currentLeds[i] = { 0, 0, 0 };
                 renderedLeds[i] = { 0, 0, 0 };
             }
@@ -708,6 +834,60 @@ void update_animation(unsigned long now) {
             strip.show();
             return;
         }
+    }
+    else if (currentAnim == ANIM_IDENTIFY) {
+        unsigned long elapsed = now - animStartMs;
+        bool finished = (elapsed >= animDurationMs);
+
+        if (finished) {
+            currentAnim = ANIM_NONE;
+            compute_target_colors(currentMode, customR, customG, customB, currentLeds);
+            currentBrightness = (float)brightness;
+            render_frame(now);
+            return;
+        }
+
+        // 3 pulses over 1500ms (500ms period: 250ms ON radiant gold, 250ms OFF)
+        bool flashOn = ((elapsed % 500) < 250);
+        for (int i = 0; i < numLeds; i++) {
+            currentLeds[i] = flashOn ? RgbColor{ 255, 200, 80 } : RgbColor{ 0, 0, 0 };
+        }
+        currentBrightness = flashOn ? 255.0f : 0.0f;
+        render_frame(now);
+        return;
+    }
+    else if (currentAnim == ANIM_HW_TEST) {
+        unsigned long elapsed = now - animStartMs;
+        bool finished = (elapsed >= animDurationMs);
+
+        if (finished) {
+            currentAnim = ANIM_NONE;
+            compute_target_colors(currentMode, customR, customG, customB, currentLeds);
+            currentBrightness = (float)brightness;
+            render_frame(now);
+            return;
+        }
+
+        // Strip alignment & visual diagnostic:
+        // Index 0: RED (Start)
+        // Index numLeds/2: GREEN (Center)
+        // Index numLeds-1: BLUE (End)
+        // Rest: Dim warm amber so all LEDs light up
+        int midIdx = numLeds / 2;
+        for (int i = 0; i < numLeds; i++) {
+            if (i == 0) {
+                currentLeds[i] = { 255, 0, 0 };
+            } else if (i == midIdx) {
+                currentLeds[i] = { 0, 255, 0 };
+            } else if (i == numLeds - 1) {
+                currentLeds[i] = { 0, 0, 255 };
+            } else {
+                currentLeds[i] = { 40, 20, 5 };
+            }
+        }
+        currentBrightness = 255.0f;
+        render_frame(now);
+        return;
     }
     else if (currentAnim == ANIM_NONE) {
         // Smooth brightness slew tracking
@@ -732,7 +912,14 @@ void notify_state() {
                  ",\"r\":" + String(customR) +
                  ",\"g\":" + String(customG) +
                  ",\"b\":" + String(customB) +
-                 ",\"ver\":\"" + String(FIRMWARE_VERSION) + "\"}";
+                 ",\"ver\":\"" + String(FIRMWARE_VERSION) + "\"" +
+                 ",\"name\":\"" + String(activeDeviceName) + "\"" +
+                 ",\"mac\":\"" + String(macSuffixStr) + "\"" +
+                 ",\"leds\":" + String(numLeds) +
+                 ",\"max_ma\":" + String(maxCurrentMa) +
+                 ",\"trans\":" + String(transitionStyle) +
+                 ",\"amb\":" + String(ambientStyle) +
+                 ",\"depth\":" + String(ambientDepth) + "}";
     pCharacteristic->setValue((uint8_t*)pkt.c_str(), pkt.length());
     pCharacteristic->notify();
 }
@@ -1373,6 +1560,106 @@ void handle_command(const String& json) {
         return;
     }
 
+    // 1b. Multi-Device Identity & Naming Commands
+    if (cmd == "set_name") {
+        String newName = extract_json_string(json, "name");
+        newName.trim();
+        if (newName.length() > 0 && newName.length() <= 32) {
+            strncpy(activeDeviceName, newName.c_str(), sizeof(activeDeviceName) - 1);
+            activeDeviceName[sizeof(activeDeviceName) - 1] = '\0';
+            prefs.begin("tl", false);
+            prefs.putString("dev_name", activeDeviceName);
+            prefs.end();
+            NimBLEDevice::setDeviceName(activeDeviceName);
+            notify_state();
+            Serial.printf("[BLE] Device name updated to '%s'\n", activeDeviceName);
+        }
+        return;
+    }
+
+    if (cmd == "reset_name") {
+        strncpy(activeDeviceName, defaultDeviceName, sizeof(activeDeviceName) - 1);
+        activeDeviceName[sizeof(activeDeviceName) - 1] = '\0';
+        prefs.begin("tl", false);
+        if (prefs.isKey("dev_name")) {
+            prefs.remove("dev_name");
+        }
+        prefs.end();
+        NimBLEDevice::setDeviceName(activeDeviceName);
+        notify_state();
+        Serial.printf("[BLE] Device name reset to default '%s'\n", activeDeviceName);
+        return;
+    }
+
+    if (cmd == "identify") {
+        start_identify_animation();
+        Serial.println("[BLE] Triggered Identify / Blink animation");
+        return;
+    }
+
+    // 1c. Hardware & LED Count Configuration: {"cmd":"set_hw_config","leds":180,"max_ma":3000}
+    if (cmd == "set_hw_config") {
+        int newLeds = extract_json_int(json, "leds", -1);
+        int newMaxMa = extract_json_int(json, "max_ma", -1);
+        bool changed = false;
+
+        if (newLeds >= 10 && newLeds <= MAX_LEDS) {
+            numLeds = (uint16_t)newLeds;
+            strip.updateLength(numLeds);
+            strip.clear();
+            strip.show();
+            compute_target_colors(currentMode, customR, customG, customB, currentLeds);
+            changed = true;
+            Serial.printf("[HW] Active LEDs updated to %d\n", numLeds);
+        }
+        if (newMaxMa >= 500 && newMaxMa <= 15000) {
+            maxCurrentMa = (uint16_t)newMaxMa;
+            changed = true;
+            Serial.printf("[HW] Max current safety budget set to %d mA\n", maxCurrentMa);
+        }
+        if (changed) {
+            save_hw_config();
+            render_frame(millis());
+            notify_state();
+        }
+        return;
+    }
+
+    // 1d. Animation & Sacred Aura Configuration: {"cmd":"set_anim_config","trans":1,"ambient":2,"depth":8}
+    if (cmd == "set_anim_config") {
+        int newTrans = extract_json_int(json, "trans", -1);
+        int newAmb = extract_json_int(json, "ambient", -1);
+        int newDepth = extract_json_int(json, "depth", -1);
+        bool changed = false;
+
+        if (newTrans >= 0 && newTrans <= 2) {
+            transitionStyle = (uint8_t)newTrans;
+            changed = true;
+        }
+        if (newAmb >= 0 && newAmb <= 2) {
+            ambientStyle = (uint8_t)newAmb;
+            changed = true;
+        }
+        if (newDepth >= 1 && newDepth <= 30) {
+            ambientDepth = (uint8_t)newDepth;
+            changed = true;
+        }
+        if (changed) {
+            save_anim_config();
+            render_frame(millis());
+            notify_state();
+            Serial.printf("[ANIM] Config updated: trans=%d, amb=%d, depth=%d%%\n", transitionStyle, ambientStyle, ambientDepth);
+        }
+        return;
+    }
+
+    // 1e. Hardware Diagnostic Test: {"cmd":"hw_test"}
+    if (cmd == "hw_test") {
+        start_hw_test_animation();
+        Serial.println("[HW] Triggered strip alignment check");
+        return;
+    }
+
     // 2. Time Synchronization: {"cmd":"time","y":2026,"mon":9,"d":21,"h":11,"m":30,"s":0,"epoch":...}
     if (cmd == "time") {
         int tzMin = extract_json_int(json, "tz_min", -9999);
@@ -1677,6 +1964,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     void onDisconnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
         deviceConnected = false;
         hasActiveConn = false;
+        if (currentAnim == ANIM_IDENTIFY || currentAnim == ANIM_HW_TEST) {
+            currentAnim = ANIM_NONE;
+            compute_target_colors(currentMode, customR, customG, customB, currentLeds);
+            currentBrightness = (float)brightness;
+            render_frame(millis());
+        }
         if (otaInProgress) {
             Serial.println("[OTA] Disconnected during update -> Aborting");
             otaAbortSession();
@@ -1927,6 +2220,7 @@ void setup() {
     otaMarkAppValid();
 
     load_state();
+    load_hw_and_anim_config();
     load_modes_from_nvs();
     load_schedules_from_nvs();
     load_logs_from_nvs();
@@ -1950,8 +2244,29 @@ void setup() {
 
     record_light_log(true, "Power Cycle Boot");
 
+    // Dynamic Device Identity: Derive default name from Bluetooth MAC address suffix
+    uint8_t baseMac[6];
+    esp_read_mac(baseMac, ESP_MAC_BT);
+    snprintf(macSuffixStr, sizeof(macSuffixStr), "%02X%02X", baseMac[4], baseMac[5]);
+    snprintf(defaultDeviceName, sizeof(defaultDeviceName), "Temple Lights %s", macSuffixStr);
+
+    prefs.begin("tl", true);
+    String savedName = "";
+    if (prefs.isKey("dev_name")) {
+        savedName = prefs.getString("dev_name", "");
+    }
+    prefs.end();
+
+    if (savedName.length() > 0) {
+        strncpy(activeDeviceName, savedName.c_str(), sizeof(activeDeviceName) - 1);
+        activeDeviceName[sizeof(activeDeviceName) - 1] = '\0';
+    } else {
+        strncpy(activeDeviceName, defaultDeviceName, sizeof(activeDeviceName) - 1);
+        activeDeviceName[sizeof(activeDeviceName) - 1] = '\0';
+    }
+
     // Initialize NimBLE Server FIRST so radio setup does not block animation
-    NimBLEDevice::init(DEVICE_NAME);
+    NimBLEDevice::init(activeDeviceName);
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
     NimBLEDevice::setMTU(517);
 
@@ -1999,7 +2314,7 @@ void setup() {
     pAdv->setScanResponse(true);
     pAdv->start();
 
-    Serial.printf("[BLE] Advertising as '%s'\n", DEVICE_NAME);
+    Serial.printf("[BLE] Advertising as '%s'\n", activeDeviceName);
     Serial.printf("[BLE] Primary Service: %s\n", SERVICE_UUID);
     Serial.printf("[BLE] OTA Service:     %s\n", OTA_SERVICE_UUID);
     Serial.println("[BLE] Ready. Waiting for app connection...");

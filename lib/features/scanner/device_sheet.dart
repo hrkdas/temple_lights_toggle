@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../contract/light_contract.dart';
 import '../../core/kv_store.dart';
+import '../../domain/models.dart';
 import '../../domain/providers.dart';
 import '../../transport/scanner.dart';
 import '../../ui/theme.dart';
@@ -61,8 +62,76 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
     }
   }
 
+  Future<void> _switchTo(String id, String name) async {
+    setState(() => _connectingId = id);
+    final session = ref.read(lightSessionProvider.notifier);
+    await session.switchToDevice(id, name: name);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _connect(ScannedDevice device) async {
     await _connectRaw(device.id, device.name);
+  }
+
+  Future<void> _showRenameDialog(BuildContext context, PairedDevice device) async {
+    final textController = TextEditingController(text: device.displayName);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Rename Temple Light', style: AppTheme.heading(size: 18)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Assign a friendly room name (e.g. Puja Room, Mandir Altar, Living Room):',
+              style: AppTheme.body(size: 13, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textController,
+              autofocus: true,
+              maxLength: 32,
+              decoration: InputDecoration(
+                hintText: 'e.g. Puja Room Shrine',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AppTheme.amber, width: 2),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: AppTheme.body(size: 13, color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.amber,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(textController.text.trim()),
+            child: Text('Save Name', style: AppTheme.heading(size: 13, color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty) {
+      await ref.read(pairedDevicesProvider.notifier).updateCustomAlias(device.id, newName);
+      final conn = ref.read(lightSessionProvider);
+      if (conn.isConnected && conn.deviceId == device.id) {
+        await ref.read(lightControlProvider.notifier).setDeviceName(newName);
+      }
+    }
   }
 
   @override
@@ -188,39 +257,69 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                     ),
                                   ),
                                 ),
-                                title: Row(
+                                title: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Text(
-                                        p.name,
-                                        style: AppTheme.heading(size: 15),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            p.displayName,
+                                            style: AppTheme.heading(size: 15),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (isCurrentlyConnected)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: AppTheme.green.withValues(alpha: 0.15),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              'ACTIVE',
+                                              style: AppTheme.heading(size: 9, color: AppTheme.green),
+                                            ),
+                                          )
+                                        else if (isLastConnected)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: AppTheme.cyan.withValues(alpha: 0.15),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              'AUTO-TARGET',
+                                              style: AppTheme.heading(size: 9, color: AppTheme.cyan),
+                                            ),
+                                          ),
+                                        if (p.firmwareVersion != null && p.firmwareVersion != LightBleUuids.bundledFirmwareVersion) ...[
+                                          const SizedBox(width: 4),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: AppTheme.amber.withValues(alpha: 0.2),
+                                              borderRadius: BorderRadius.circular(4),
+                                              border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
+                                            ),
+                                            child: Text(
+                                              'UPDATE',
+                                              style: AppTheme.heading(size: 8, color: AppTheme.amber),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
                                     ),
-                                    if (isCurrentlyConnected)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: AppTheme.green.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          'ACTIVE',
-                                          style: AppTheme.heading(size: 9, color: AppTheme.green),
-                                        ),
+                                    if (p.customAlias != null && p.customAlias!.isNotEmpty && p.customAlias != p.name)
+                                      Text(
+                                        '${p.name} • ${p.effectiveLedCount} LEDs (${p.formattedLength})',
+                                        style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
                                       )
-                                    else if (isLastConnected)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: AppTheme.cyan.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          'AUTO-TARGET',
-                                          style: AppTheme.heading(size: 9, color: AppTheme.cyan),
-                                        ),
+                                    else
+                                      Text(
+                                        '${p.effectiveLedCount} LEDs (${p.formattedLength})',
+                                        style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
                                       ),
                                   ],
                                 ),
@@ -243,10 +342,10 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                           style: AppTheme.body(size: 11, color: AppTheme.textSecondary),
                                         ),
                                       ] else ...[
-                                        Icon(Icons.portable_wifi_off_rounded, size: 14, color: AppTheme.textMuted),
+                                        const Icon(Icons.portable_wifi_off_rounded, size: 14, color: AppTheme.textMuted),
                                         const SizedBox(width: 6),
                                         Text(
-                                          'Offline / Not in range',
+                                          'Offline / Standby',
                                           style: AppTheme.body(size: 11, color: AppTheme.textMuted),
                                         ),
                                       ],
@@ -256,6 +355,33 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    if (isCurrentlyConnected) ...[
+                                      IconButton(
+                                        icon: const Icon(Icons.lightbulb_outline_rounded, color: AppTheme.amber, size: 20),
+                                        tooltip: 'Blink to Identify',
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                        onPressed: () async {
+                                          await ref.read(lightControlProvider.notifier).identifyDevice();
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('Blinking "${p.displayName}" 3 times to identify...'),
+                                                duration: const Duration(seconds: 2),
+                                                behavior: SnackBarBehavior.floating,
+                                              ),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                    ],
+                                    IconButton(
+                                      icon: const Icon(Icons.drive_file_rename_outline_rounded, color: AppTheme.textSecondary, size: 18),
+                                      tooltip: 'Rename',
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                      onPressed: () => _showRenameDialog(context, p),
+                                    ),
                                     if (isConnecting)
                                       const SizedBox(
                                         width: 24,
@@ -270,24 +396,24 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: AppTheme.amber,
                                           foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                                          minimumSize: const Size(58, 32),
+                                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                                          minimumSize: const Size(54, 30),
                                           shape: RoundedRectangleBorder(
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                         ),
-                                        onPressed: _connectingId == null ? () => _connectRaw(p.id, p.name) : null,
+                                        onPressed: _connectingId == null ? () => _switchTo(p.id, p.displayName) : null,
                                         child: Text(
-                                          'Connect',
+                                          'Switch',
                                           style: AppTheme.heading(size: 11, color: Colors.white),
                                         ),
                                       ),
-                                    const SizedBox(width: 4),
+                                    const SizedBox(width: 2),
                                     IconButton(
-                                      icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.textMuted, size: 20),
+                                      icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.textMuted, size: 18),
                                       tooltip: 'Unpair',
                                       padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                                       onPressed: () async {
                                         await ref.read(pairedDevicesProvider.notifier).remove(p.id);
                                         if (isCurrentlyConnected) {

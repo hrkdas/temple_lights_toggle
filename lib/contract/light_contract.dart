@@ -28,9 +28,18 @@ class LightBleUuids {
     legacyService,
   ];
   static const String targetDeviceName = 'Temple Lights';
-  static const String bundledFirmwareVersion = '1.2.0';
+  static const String bundledFirmwareVersion = '1.3.0';
 
-  static bool isTargetDevice({required String name, List<String>? serviceUuids}) {
+  static bool isTargetDevice({
+    required String name,
+    List<String>? serviceUuids,
+    String? nameFilter,
+  }) {
+    if (nameFilter != null && nameFilter.trim().isNotEmpty) {
+      if (name.toLowerCase().contains(nameFilter.trim().toLowerCase())) {
+        return true;
+      }
+    }
     final lowerName = name.trim().toLowerCase();
     if (lowerName == targetDeviceName.toLowerCase() ||
         lowerName.contains('temple') ||
@@ -46,8 +55,12 @@ class LightBleUuids {
     return false;
   }
 
-  static bool isTargetRelayDevice({required String name, List<String>? serviceUuids}) =>
-      isTargetDevice(name: name, serviceUuids: serviceUuids);
+  static bool isTargetRelayDevice({
+    required String name,
+    List<String>? serviceUuids,
+    String? nameFilter,
+  }) =>
+      isTargetDevice(name: name, serviceUuids: serviceUuids, nameFilter: nameFilter);
 }
 
 class LightPacketEncoder {
@@ -200,4 +213,38 @@ class LightPacketEncoder {
 
   static Uint8List encodeResetModes() =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'reset_modes'})));
+
+  static Uint8List encodeSetName(String name) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'set_name', 'name': name})));
+
+  static Uint8List encodeResetName() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'reset_name'})));
+
+  static Uint8List encodeIdentify() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'identify'})));
+
+  static Uint8List encodeSetHwConfig({
+    required int leds,
+    required int maxCurrentMa,
+  }) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'set_hw_config',
+        'leds': leds,
+        'max_ma': maxCurrentMa,
+      })));
+
+  static Uint8List encodeSetAnimConfig({
+    required int transitionStyle,
+    required int ambientStyle,
+    int depth = 6,
+  }) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'set_anim_config',
+        'trans': transitionStyle,
+        'ambient': ambientStyle,
+        'depth': depth,
+      })));
+
+  static Uint8List encodeHwTest() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'hw_test'})));
 }

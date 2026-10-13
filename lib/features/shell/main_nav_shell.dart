@@ -73,6 +73,8 @@ class _MainNavShellState extends ConsumerState<MainNavShell> {
     final conn = ref.watch(lightSessionProvider);
     final light = ref.watch(lightControlProvider);
 
+    final activeDevice = ref.watch(activeDeviceProvider);
+
     final statusColor = conn.isConnected
         ? (light.isOn && light.brightness > 0 ? AppTheme.amber : AppTheme.cyan)
         : (conn.isReconnecting ? AppTheme.gold : AppTheme.red);
@@ -80,72 +82,88 @@ class _MainNavShellState extends ConsumerState<MainNavShell> {
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceRaised,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppTheme.amber.withValues(alpha: 0.15),
-                    blurRadius: 6,
+        title: InkWell(
+          onTap: _openDevicePicker,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceRaised,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.amber.withValues(alpha: 0.15),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(7),
+                    child: Image.asset(
+                      'assets/icons/temple_icon.png',
+                      width: 30,
+                      height: 30,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(Icons.temple_hindu_rounded, color: AppTheme.amber, size: 18),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 160),
+                  child: Text(
+                    _currentIndex == 0 ? (activeDevice?.displayName ?? _appBarTitle) : _appBarTitle,
+                    style: AppTheme.heading(size: 14, letterSpacing: 1.2),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (_currentIndex == 0) ...[
+                  const SizedBox(width: 2),
+                  const Icon(Icons.arrow_drop_down_rounded, color: AppTheme.amber, size: 20),
+                ],
+                const SizedBox(width: 6),
+                // Live Status Indicator Dot
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                    boxShadow: [
+                      BoxShadow(
+                        color: statusColor.withValues(alpha: 0.8),
+                        blurRadius: 5,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+                if (conn.isConnected && conn.rssi != null) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceRaised,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+                    ),
+                    child: Text(
+                      '${conn.rssi} dBm',
+                      style: AppTheme.heading(size: 10, color: statusColor),
+                    ),
                   ),
                 ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(7),
-                child: Image.asset(
-                  'assets/icons/temple_icon.png',
-                  width: 32,
-                  height: 32,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const Icon(Icons.temple_hindu_rounded, color: AppTheme.amber, size: 20),
-                ),
-              ),
+              ],
             ),
-            const SizedBox(width: 10),
-            Text(
-              _appBarTitle,
-              style: AppTheme.heading(size: 15, letterSpacing: 1.8),
-            ),
-            const SizedBox(width: 8),
-            // Live Status Indicator Dot
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: statusColor,
-                boxShadow: [
-                  BoxShadow(
-                    color: statusColor.withValues(alpha: 0.8),
-                    blurRadius: 5,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-            ),
-            if (conn.isConnected && conn.rssi != null) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceRaised,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: statusColor.withValues(alpha: 0.4)),
-                ),
-                child: Text(
-                  '${conn.rssi} dBm',
-                  style: AppTheme.heading(size: 10, color: statusColor),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
         actions: [
           Consumer(

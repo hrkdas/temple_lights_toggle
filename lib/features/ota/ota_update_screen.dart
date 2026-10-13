@@ -45,6 +45,7 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
   @override
   Widget build(BuildContext context) {
     final otaState = ref.watch(otaProgressProvider);
+    final activeDevice = ref.watch(activeDeviceProvider);
     final isUpdating = otaState.isInProgress;
 
     return Scaffold(
@@ -72,7 +73,7 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               // Version & Device Info Card
-              _buildVersionBanner(otaState),
+              _buildVersionBanner(otaState, activeDevice),
               const SizedBox(height: 32),
 
               // Animated Radial Progress Ring
@@ -147,7 +148,7 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
     );
   }
 
-  Widget _buildVersionBanner(OtaProgressState ota) {
+  Widget _buildVersionBanner(OtaProgressState ota, PairedDevice? activeDevice) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
@@ -162,45 +163,71 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'CURRENT FIRMWARE',
-                style: AppTheme.mono(size: 10.5, color: AppTheme.textMuted),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                ota.deviceFirmwareVersion != null
-                    ? 'v${ota.deviceFirmwareVersion}'
-                    : 'v1.0.0 (Pre-OTA)',
-                style: AppTheme.heading(size: 14, color: AppTheme.textPrimary),
-              ),
-            ],
-          ),
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: AppTheme.amber.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
+          if (activeDevice != null) ...[
+            Row(
+              children: [
+                const Icon(Icons.lightbulb_rounded, size: 16, color: AppTheme.amber),
+                const SizedBox(width: 8),
+                Text(
+                  'TARGET LIGHT:',
+                  style: AppTheme.mono(size: 10, color: AppTheme.textMuted),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    activeDevice.displayName,
+                    style: AppTheme.heading(size: 13, color: AppTheme.amber),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
-            child: const Icon(Icons.arrow_forward_rounded,
-                size: 16, color: AppTheme.amber),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+            const Divider(height: 18, color: AppTheme.border),
+          ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'BUNDLED APK FIRMWARE',
-                style: AppTheme.mono(size: 10.5, color: AppTheme.textMuted),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'CURRENT FIRMWARE',
+                    style: AppTheme.mono(size: 10.5, color: AppTheme.textMuted),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    ota.deviceFirmwareVersion != null
+                        ? 'v${ota.deviceFirmwareVersion}'
+                        : 'v1.0.0 (Pre-OTA)',
+                    style: AppTheme.heading(size: 14, color: AppTheme.textPrimary),
+                  ),
+                ],
               ),
-              const SizedBox(height: 2),
-              Text(
-                'v${ota.bundledFirmwareVersion}',
-                style: AppTheme.heading(size: 14, color: AppTheme.amber),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppTheme.amber.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.arrow_forward_rounded,
+                    size: 16, color: AppTheme.amber),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'BUNDLED APK FIRMWARE',
+                    style: AppTheme.mono(size: 10.5, color: AppTheme.textMuted),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'v${ota.bundledFirmwareVersion}',
+                    style: AppTheme.heading(size: 14, color: AppTheme.amber),
+                  ),
+                ],
               ),
             ],
           ),
