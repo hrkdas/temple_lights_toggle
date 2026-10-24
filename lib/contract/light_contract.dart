@@ -274,7 +274,15 @@ class LightPacketEncoder {
   static Uint8List encodeSetSegments(List<LedSegment> segments) =>
       Uint8List.fromList(utf8.encode(jsonEncode({
         'cmd': 'set_segs',
-        'segs': segments.map((s) => s.toJson()).toList(),
+        'segs': segments.map((s) => {
+          'start': s.start,
+          'count': s.count,
+          'r': s.r,
+          'g': s.g,
+          'b': s.b,
+          'bright': s.brightness,
+          'fx': s.effect,
+        }).toList(),
       })));
 
   static Uint8List encodeSetCycleFlags(int bitmask) =>

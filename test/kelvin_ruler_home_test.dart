@@ -123,6 +123,27 @@ void main() {
       expect(updated[0].count, 60);
       expect(updated[0].end, 79);
     });
+
+    testWidgets('Renders StripVisualizerWidget and quick presets for 105 LEDs', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StripVisualizerWidget(
+              totalLeds: 105,
+              segments: const [
+                LedSegment(start: 0, count: 6, r: 255, g: 147, b: 41, name: 'Pillar 1–6'),
+                LedSegment(start: 100, count: 5, r: 255, g: 255, b: 255, name: 'Apex 101–105'),
+              ],
+              onSegmentsChanged: (_) {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('LED STRIP RULER (105 LEDs)'), findsOneWidget);
+      expect(find.text('Quick Range'), findsOneWidget);
+      expect(find.text('Pillars & Halo'), findsOneWidget);
+    });
   });
 
   group('SplitTileCard Widget Interaction Tests', () {

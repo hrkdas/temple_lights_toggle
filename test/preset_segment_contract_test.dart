@@ -1,9 +1,16 @@
 import 'dart:convert';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:temple_lights_toggle/contract/light_contract.dart';
 import 'package:temple_lights_toggle/domain/models.dart';
+import 'package:temple_lights_toggle/domain/providers.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(const MethodChannel('flutter_reactive_ble_method'), (call) async => null);
+
   group('LedSegment Model & Serialization', () {
     test('LedSegment calculates end, displayName and color correctly', () {
       final seg = LedSegment(
@@ -288,6 +295,82 @@ void main() {
       final bytes = LightPacketEncoder.encodeResetPresets();
       final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       expect(json['cmd'], 'reset_presets');
+    });
+
+    test('encodeSetSegments emits compact wire payload under 130 bytes without bloated name strings', () {
+      final segs = [
+        const LedSegment(start: 0, count: 6, r: 255, g: 147, b: 41, name: 'Very Long Descriptive Pillar Name That Bloats Wire Packet'),
+        const LedSegment(start: 100, count: 6, r: 255, g: 255, b: 255, name: 'Very Long Apex Dome Halo Descriptive Name'),
+      ];
+
+      final bytes = LightPacketEncoder.encodeSetSegments(segs);
+      final jsonStr = utf8.decode(bytes);
+      expect(bytes.length, lessThan(170)); // Compact packet ensures zero truncation over BLE
+      expect(jsonStr.contains('Bloats Wire Packet'), isFalse);
+
+      final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+      expect(json['cmd'], 'set_segs');
+      final list = json['segs'] as List<dynamic>;
+      expect(list.length, 2);
+      expect(list[0]['start'], 0);
+      expect(list[0]['count'], 6);
+      expect(list[0]['bright'], 255);
+      expect(list[1]['start'], 100);
+      expect(list[1]['count'], 6);
+    });
+  });
+
+  group('LightControlNotifier Segment Isolation & Reset Tests', () {
+    test('setMode clears segment overrides', () {
+      final container = ProviderContainer();
+      final ctrl = container.read(lightControlProvider.notifier);
+
+      ctrl.setSegments([
+        const LedSegment(start: 0, count: 6),
+      ]);
+      expect(container.read(lightControlProvider).segments.length, 1);
+
+      ctrl.setMode(0);
+      expect(container.read(lightControlProvider).mode, 0);
+      expect(container.read(lightControlProvider).segments.isEmpty, isTrue);
+    });
+
+    test('setRgb clears segment overrides', () {
+      final container = ProviderContainer();
+      final ctrl = container.read(lightControlProvider.notifier);
+
+      ctrl.setSegments([
+        const LedSegment(start: 0, count: 6),
+      ]);
+      expect(container.read(lightControlProvider).segments.length, 1);
+
+      ctrl.setRgb(255, 200, 100);
+      expect(container.read(lightControlProvider).mode, 3);
+      expect(container.read(lightControlProvider).r, 255);
+      expect(container.read(lightControlProvider).g, 200);
+      expect(container.read(lightControlProvider).b, 100);
+      expect(container.read(lightControlProvider).segments.isEmpty, isTrue);
+    });
+
+    test('updateFromHardware clears segments when activeSegmentCount is 0 in mode < 3', () {
+      final container = ProviderContainer();
+      final ctrl = container.read(lightControlProvider.notifier);
+
+      ctrl.setSegments([
+        const LedSegment(start: 0, count: 6),
+      ]);
+      expect(container.read(lightControlProvider).segments.isNotEmpty, isTrue);
+
+      ctrl.updateFromHardware(
+        mode: 1,
+        brightness: 255,
+        r: 255,
+        g: 147,
+        b: 41,
+        activeSegmentCount: 0,
+      );
+      expect(container.read(lightControlProvider).mode, 1);
+      expect(container.read(lightControlProvider).segments.isEmpty, isTrue);
     });
   });
 }

@@ -12,6 +12,7 @@ import '../../ui/widgets/kelvin_warmth_slider.dart';
 import '../../ui/widgets/light_dial_button.dart';
 import '../../ui/widgets/radar_sweep.dart';
 import '../../ui/widgets/split_tile_card.dart';
+import '../../ui/widgets/strip_visualizer_widget.dart';
 import '../scanner/device_sheet.dart';
 
 /// Main screen featuring BLE auto-connect telemetry, mode controls, brightness slider, and RGB picker.
@@ -488,6 +489,11 @@ class LightsScreen extends ConsumerWidget {
 
             // Brightness Slider Card
             _buildBrightnessCard(light, ctrl),
+
+            const SizedBox(height: 14),
+
+            // Interactive LED Strip Ruler & Range Selection Card
+            _buildStripRulerCard(context, light, ctrl),
 
             const SizedBox(height: 14),
 
@@ -1007,6 +1013,104 @@ class LightsScreen extends ConsumerWidget {
                 ),
               );
             }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStripRulerCard(
+    BuildContext context,
+    LightState light,
+    LightControlNotifier ctrl,
+  ) {
+    final stripCount = light.ledCount > 0 ? light.ledCount : 105;
+    final hasActiveSegments = light.segments.isNotEmpty;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: hasActiveSegments
+              ? AppTheme.amber.withValues(alpha: 0.45)
+              : AppTheme.border,
+          width: hasActiveSegments ? 1.5 : 1.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: hasActiveSegments
+                ? AppTheme.amber.withValues(alpha: 0.08)
+                : const Color(0xFF3B2E1E).withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.linear_scale_rounded, size: 16, color: AppTheme.amber),
+                  const SizedBox(width: 8),
+                  Text(
+                    'LED STRIP RULER & RANGES',
+                    style: AppTheme.heading(size: 11, color: AppTheme.textMuted, letterSpacing: 1.2),
+                  ),
+                ],
+              ),
+              if (hasActiveSegments)
+                GestureDetector(
+                  onTap: () async {
+                    AppHaptics.selection();
+                    await ctrl.setRgb(light.r, light.g, light.b);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppTheme.amber.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.restart_alt_rounded, size: 12, color: AppTheme.amber),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Reset Full',
+                          style: AppTheme.heading(size: 10, color: AppTheme.amber),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          StripVisualizerWidget(
+            totalLeds: stripCount,
+            height: 70,
+            segments: light.segments.isNotEmpty
+                ? light.segments
+                : [
+                    LedSegment(
+                      start: 0,
+                      count: stripCount,
+                      r: light.r,
+                      g: light.g,
+                      b: light.b,
+                      name: 'Full Strip',
+                    ),
+                  ],
+            onSegmentsChanged: (newSegs) {
+              ctrl.setSegments(newSegs);
+            },
           ),
         ],
       ),

@@ -552,6 +552,8 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               final trans = (json['trans'] as num?)?.toInt();
               final amb = (json['amb'] as num?)?.toInt();
               final depth = (json['depth'] as num?)?.toInt();
+              final preset = (json['preset'] as num?)?.toInt();
+              final segs = (json['segs'] as num?)?.toInt();
               _ref.read(lightControlProvider.notifier).updateFromHardware(
                     mode: m,
                     brightness: b,
@@ -564,6 +566,8 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     transitionStyle: trans,
                     ambientStyle: amb,
                     ambientDepth: depth,
+                    activePreset: preset,
+                    activeSegmentCount: segs,
                   );
               _ref.read(pairedDevicesProvider.notifier).updateCachedState(
                     id: deviceId,
@@ -927,7 +931,13 @@ class LightControlNotifier extends StateNotifier<LightState> {
   Future<void> setMode(int mode) async {
     _lastLocalInteraction = DateTime.now();
     final nextBright = state.brightness == 0 ? 255 : state.brightness;
-    state = state.copyWith(mode: mode, isOn: true, brightness: nextBright, lastToggled: DateTime.now());
+    state = state.copyWith(
+      mode: mode,
+      segments: const [],
+      isOn: true,
+      brightness: nextBright,
+      lastToggled: DateTime.now(),
+    );
     await AppHaptics.selection();
     await _dispatchPacket(LightPacketEncoder.encodeSetMode(mode));
   }
@@ -983,6 +993,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
       g: g.clamp(0, 255),
       b: b.clamp(0, 255),
       mode: 3,
+      segments: const [],
       isOn: true,
       brightness: nextBright,
       lastToggled: DateTime.now(),
@@ -1016,6 +1027,8 @@ class LightControlNotifier extends StateNotifier<LightState> {
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
+    int? activePreset,
+    int? activeSegmentCount,
   }) {
     // If the user recently changed brightness/mode locally (within last 1500ms),
     // ignore stale incoming hardware echo to prevent slider jitter or jumping
@@ -1032,6 +1045,8 @@ class LightControlNotifier extends StateNotifier<LightState> {
       g: g,
       b: b,
       isOn: isOn,
+      activePreset: activePreset ?? state.activePreset,
+      segments: (activeSegmentCount == 0 && mode < 3) ? const [] : state.segments,
       lastToggled: isRecentLocal ? state.lastToggled : DateTime.now(),
       firmwareVersion: firmwareVersion ?? state.firmwareVersion,
       ledCount: ledCount ?? state.ledCount,
@@ -1206,11 +1221,19 @@ class LightControlNotifier extends StateNotifier<LightState> {
     }
     final settings = _ref.read(settingsProvider);
     try {
-      await _client.writeWithoutResponse(
-        packet,
-        serviceUuid: settings.customServiceUuid,
-        charUuid: settings.customCharUuid,
-      );
+      if (packet.length <= 20) {
+        await _client.writeWithoutResponse(
+          packet,
+          serviceUuid: settings.customServiceUuid,
+          charUuid: settings.customCharUuid,
+        );
+      } else {
+        await _client.writeWithResponse(
+          packet,
+          serviceUuid: settings.customServiceUuid,
+          charUuid: settings.customCharUuid,
+        );
+      }
     } catch (e) {
       _log.e('Failed to send BLE packet: $e');
     }

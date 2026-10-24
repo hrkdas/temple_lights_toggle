@@ -453,8 +453,7 @@ void load_presets_from_nvs() {
         presets[0].r = defaultModes[0].r;
         presets[0].g = defaultModes[0].g;
         presets[0].b = defaultModes[0].b;
-        presets[0].segmentCount = 1;
-        presets[0].segments[0] = { 0, (uint16_t)numLeds, defaultModes[0].r, defaultModes[0].g, defaultModes[0].b, defaultModes[0].brightness, 0, 5, "Full Warm" };
+        presets[0].segmentCount = 0;
 
         // Preset 1: Center Focus 1.5m
         strncpy(presets[1].name, defaultModes[1].name, sizeof(presets[1].name) - 1);
@@ -467,10 +466,7 @@ void load_presets_from_nvs() {
         presets[1].r = defaultModes[1].r;
         presets[1].g = defaultModes[1].g;
         presets[1].b = defaultModes[1].b;
-        presets[1].segmentCount = 1;
-        uint16_t midStart = (uint16_t)((numLeds * 0.20f) + 0.5f);
-        uint16_t midCount = (numLeds > (midStart * 2)) ? (numLeds - (midStart * 2)) : numLeds;
-        presets[1].segments[0] = { midStart, midCount, defaultModes[1].r, defaultModes[1].g, defaultModes[1].b, defaultModes[1].brightness, 0, 5, "Center 1.5m" };
+        presets[1].segmentCount = 0;
 
         // Preset 2: Pure White
         strncpy(presets[2].name, defaultModes[2].name, sizeof(presets[2].name) - 1);
@@ -483,8 +479,7 @@ void load_presets_from_nvs() {
         presets[2].r = defaultModes[2].r;
         presets[2].g = defaultModes[2].g;
         presets[2].b = defaultModes[2].b;
-        presets[2].segmentCount = 1;
-        presets[2].segments[0] = { 0, (uint16_t)numLeds, defaultModes[2].r, defaultModes[2].g, defaultModes[2].b, defaultModes[2].brightness, 0, 5, "Full White" };
+        presets[2].segmentCount = 0;
 
         // Preset 3: Pillar Base (1-6) & Apex (100-105)
         strncpy(presets[3].name, "Pillar & Halo", sizeof(presets[3].name) - 1);
@@ -535,6 +530,11 @@ void load_presets_from_nvs() {
             prefs.getBytes(k.c_str(), &presets[i], sizeof(FirmwarePreset));
             presets[i].name[sizeof(presets[i].name) - 1] = '\0';
         }
+    }
+    // Backward compatibility: ensure factory standard presets 0, 1, 2 always use
+    // full strip / algorithmic styling and never retain stale segment overrides
+    for (int i = 0; i < 3 && i < presetCount; i++) {
+        presets[i].segmentCount = 0;
     }
     prefs.end();
     Serial.printf("[NVS] Loaded %d presets from tl_presets (cycleMask=0x%02X)\n", presetCount, cycleBitmask);
@@ -590,9 +590,13 @@ void activate_preset(uint8_t idx) {
     ambientStyle = p.ambientStyle;
     ambientDepth = p.ambientDepth;
 
-    activeSegmentCount = p.segmentCount;
-    for (int s = 0; s < activeSegmentCount; s++) {
-        activeSegments[s] = p.segments[s];
+    if (idx < 3) {
+        activeSegmentCount = 0; // Factory modes 0, 1, 2 use full-strip / center algorithmic logic
+    } else {
+        activeSegmentCount = p.segmentCount;
+        for (int s = 0; s < activeSegmentCount; s++) {
+            activeSegments[s] = p.segments[s];
+        }
     }
     customR = p.r; customG = p.g; customB = p.b;
 }
@@ -1799,27 +1803,58 @@ int extract_json_segments(const String& json, FirmwareLedSegment* outSegments, i
     int arrayStart = json.indexOf('[', segsIdx);
     if (arrayStart == -1) return 0;
     int arrayEnd = json.indexOf(']', arrayStart);
-    if (arrayEnd == -1) return 0;
+    if (arrayEnd == -1) {
+        // Resilient fallback: parse up to end of buffer if closing bracket is at frame boundary
+        arrayEnd = json.length();
+    }
 
     int objStart = json.indexOf('{', arrayStart);
     while (objStart != -1 && objStart < arrayEnd && count < maxSegments) {
         int objEnd = json.indexOf('}', objStart);
-        if (objEnd == -1 || objEnd > arrayEnd) break;
+        if (objEnd == -1) {
+            if (objStart < arrayEnd) objEnd = arrayEnd;
+            else break;
+        }
         String obj = json.substring(objStart, objEnd + 1);
 
-        outSegments[count].start = extract_json_int(obj, "start", 0);
-        outSegments[count].count = extract_json_int(obj, "count", 1);
+        int sVal = extract_json_int(obj, "start", -1);
+        if (sVal == -1) sVal = extract_json_int(obj, "s", 0);
+        outSegments[count].start = (sVal < 0) ? 0 : sVal;
+
+        int cVal = extract_json_int(obj, "count", -1);
+        if (cVal == -1) cVal = extract_json_int(obj, "c", 1);
+        outSegments[count].count = (cVal < 1) ? 1 : cVal;
+
         outSegments[count].r = extract_json_int(obj, "r", 255);
         outSegments[count].g = extract_json_int(obj, "g", 147);
         outSegments[count].b = extract_json_int(obj, "b", 41);
-        outSegments[count].brightness = extract_json_int(obj, "bright", 255);
+
+        int brVal = extract_json_int(obj, "bright", -1);
+        if (brVal == -1) brVal = extract_json_int(obj, "br", 255);
+        outSegments[count].brightness = constrain(brVal, 0, 255);
+
         outSegments[count].effect = extract_json_int(obj, "fx", 0);
         outSegments[count].speed = extract_json_int(obj, "spd", 5);
-        String nameStr = extract_json_string(obj, "name");
-        strncpy(outSegments[count].name, nameStr.c_str(), sizeof(outSegments[count].name) - 1);
-        outSegments[count].name[sizeof(outSegments[count].name) - 1] = '\0';
-        count++;
 
+        String nameStr = extract_json_string(obj, "name");
+        if (nameStr.length() > 0) {
+            strncpy(outSegments[count].name, nameStr.c_str(), sizeof(outSegments[count].name) - 1);
+            outSegments[count].name[sizeof(outSegments[count].name) - 1] = '\0';
+        } else {
+            snprintf(outSegments[count].name, sizeof(outSegments[count].name),
+                     "Seg %d-%d", outSegments[count].start + 1,
+                     outSegments[count].start + outSegments[count].count);
+        }
+
+        // Clamp securely to physical strip LED count
+        if (outSegments[count].start >= numLeds) {
+            outSegments[count].start = (numLeds > 0) ? numLeds - 1 : 0;
+        }
+        if (outSegments[count].start + outSegments[count].count > numLeds) {
+            outSegments[count].count = numLeds - outSegments[count].start;
+        }
+
+        count++;
         objStart = json.indexOf('{', objEnd + 1);
     }
     return count;
@@ -1938,6 +1973,7 @@ void handle_command(const String& json) {
         int m = extract_json_int(json, "mode", -1);
         if (m >= 0 && m <= 3) {
             bool wasOff = (brightness == 0);
+            activeSegmentCount = 0; // Clear segment overrides for standard modes
             currentMode = m;
             if (m < 3) {
                 targetBrightness = (defaultModes[m].brightness > 0) ? defaultModes[m].brightness : 255;
@@ -1956,7 +1992,7 @@ void handle_command(const String& json) {
             stateDirty = true;
             lastStateChangeMs = millis();
             notify_state();
-            Serial.printf("[LED] Mode → %d\n", currentMode);
+            Serial.printf("[LED] Mode → %d (segments cleared)\n", currentMode);
         }
         return;
     }
@@ -1992,6 +2028,7 @@ void handle_command(const String& json) {
         int g = extract_json_int(json, "g", -1);
         int b = extract_json_int(json, "b", -1);
         if (r >= 0 && g >= 0 && b >= 0) {
+            activeSegmentCount = 0; // Clear segment overrides for full strip custom RGB
             customR = constrain(r, 0, 255);
             customG = constrain(g, 0, 255);
             customB = constrain(b, 0, 255);
@@ -2006,6 +2043,7 @@ void handle_command(const String& json) {
             stateDirty = true;
             lastStateChangeMs = millis();
             notify_state();
+            Serial.printf("[LED] RGB → (%d,%d,%d) Mode 3 (segments cleared)\n", customR, customG, customB);
         }
         return;
     }
@@ -2519,6 +2557,7 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
             uint8_t b = (uint8_t)val[0];
             if (b <= 3) {
                 bool wasOff = (brightness == 0);
+                activeSegmentCount = 0; // Clear segment overrides for direct mode shortcut
                 currentMode = b;
                 if (b < 3) {
                     targetBrightness = (defaultModes[b].brightness > 0) ? defaultModes[b].brightness : 255;
