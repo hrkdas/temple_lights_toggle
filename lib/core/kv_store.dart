@@ -45,4 +45,6 @@ class KvKeys {
   static const savedDevices = 'saved_devices_v1';
   static const savedSchedules = 'saved_schedules_v1';
   static const savedModes = 'saved_default_modes_v1';
+  static const savedPresets = 'saved_light_presets_v1';
+  static const savedRooms = 'saved_rooms_v1';
 }

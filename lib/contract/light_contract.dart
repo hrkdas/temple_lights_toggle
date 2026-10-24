@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import '../domain/models.dart';
 
 class LightBleUuids {
   LightBleUuids._();
@@ -247,4 +248,38 @@ class LightPacketEncoder {
 
   static Uint8List encodeHwTest() =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'hw_test'})));
+
+  static Uint8List encodeSetPreset(int index) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'set_preset', 'idx': index})));
+
+  static Uint8List encodeGetPresets() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'get_presets'})));
+
+  static Uint8List encodeSavePreset(LightPreset preset) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'save_preset',
+        'idx': preset.index,
+        'name': preset.name,
+        'bright': preset.brightness,
+        'trans': preset.transitionStyle,
+        'amb': preset.ambientStyle,
+        'depth': preset.ambientDepth,
+        'cycle': preset.cycleEnabled,
+        'r': preset.r,
+        'g': preset.g,
+        'b': preset.b,
+        'segs': preset.segments.map((s) => s.toJson()).toList(),
+      })));
+
+  static Uint8List encodeSetSegments(List<LedSegment> segments) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'set_segs',
+        'segs': segments.map((s) => s.toJson()).toList(),
+      })));
+
+  static Uint8List encodeSetCycleFlags(int bitmask) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'set_cycle', 'mask': bitmask})));
+
+  static Uint8List encodeResetPresets() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'reset_presets'})));
 }

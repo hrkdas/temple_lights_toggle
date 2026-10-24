@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../contract/light_contract.dart';
 import '../contract/ota_constants.dart';
 import '../core/haptics.dart';
+import '../core/backup_service.dart';
 import '../core/kv_store.dart';
 import '../core/log.dart';
 import '../core/permissions.dart';
@@ -37,6 +38,10 @@ final kvStoreProvider = Provider<KvStore>((ref) {
   final current = KvStore.current;
   if (current != null) return current;
   throw StateError('kvStoreProvider not initialized before runApp()');
+});
+
+final backupServiceProvider = Provider<BackupService>((ref) {
+  return BackupService(ref.watch(kvStoreProvider));
 });
 
 // ============================================================================
@@ -191,6 +196,16 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     if (matched) {
       await _persist();
     }
+  }
+
+  void loadFromKv() => _load();
+
+  Future<void> updateDeviceRoom(String id, String roomId) async {
+    state = [
+      for (final d in state)
+        if (d.id == id) d.copyWith(roomId: roomId) else d,
+    ];
+    await _persist();
   }
 
   Future<void> remove(String id) async {
@@ -572,6 +587,8 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               _log.i('ESP32 confirmed RTC time sync');
             } else if (type == 'mode_cfg' || type == 'modes_end') {
               _ref.read(defaultModesProvider.notifier).handleIncomingModePacket(json);
+            } else if (type == 'preset_item' || type == 'presets_end') {
+              _ref.read(presetsProvider.notifier).handleIncomingPresetPacket(json);
             } else if (type == 'sched' || type == 'sched_start' || type == 'sched_end') {
               _ref.read(schedulesProvider.notifier).handleIncomingHydration(json);
             } else if (type == 'log') {
@@ -625,6 +642,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
     _startPeriodicTimeSync();
     unawaited(_ref.read(schedulesProvider.notifier).onDeviceConnected());
     unawaited(_ref.read(defaultModesProvider.notifier).onDeviceConnected());
+    unawaited(_ref.read(presetsProvider.notifier).onDeviceConnected());
     unawaited(_ref.read(wifiProvider.notifier).requestStatus());
     _startLiveRssiTracking(deviceId);
 
@@ -914,6 +932,42 @@ class LightControlNotifier extends StateNotifier<LightState> {
     await _dispatchPacket(LightPacketEncoder.encodeSetMode(mode));
   }
 
+  /// Activate modern dynamic preset (with segments & animations)
+  Future<void> setPreset(int index) async {
+    _lastLocalInteraction = DateTime.now();
+    final nextBright = state.brightness == 0 ? 255 : state.brightness;
+    state = state.copyWith(
+      activePreset: index,
+      mode: index < 3 ? index : 3,
+      isOn: true,
+      brightness: nextBright,
+      lastToggled: DateTime.now(),
+    );
+    await AppHaptics.selection();
+    await _dispatchPacket(LightPacketEncoder.encodeSetPreset(index));
+  }
+
+  /// Live set arbitrary LED segments on the strip
+  Future<void> setSegments(List<LedSegment> segments) async {
+    _lastLocalInteraction = DateTime.now();
+    final nextBright = state.brightness == 0 ? 255 : state.brightness;
+    state = state.copyWith(
+      segments: segments,
+      mode: 3,
+      isOn: true,
+      brightness: nextBright,
+      lastToggled: DateTime.now(),
+    );
+    await AppHaptics.selection();
+    await _dispatchPacket(LightPacketEncoder.encodeSetSegments(segments));
+  }
+
+  /// Configure wall-switch cycle bitmask
+  Future<void> setCycleFlags(int bitmask) async {
+    state = state.copyWith(cycleFlags: bitmask);
+    await _dispatchPacket(LightPacketEncoder.encodeSetCycleFlags(bitmask));
+  }
+
   /// Cycle to next mode
   Future<void> nextMode() async {
     final nextM = (state.mode + 1) % 4;
@@ -1062,6 +1116,17 @@ class LightControlNotifier extends StateNotifier<LightState> {
     }
   }
 
+  Future<void> setAnimConfig({
+    int? transitionStyle,
+    int? ambientStyle,
+    int? ambientDepth,
+  }) =>
+      setAnimationConfig(
+        transitionStyle: transitionStyle ?? state.transitionStyle,
+        ambientStyle: ambientStyle ?? state.ambientStyle,
+        depth: ambientDepth ?? state.ambientDepth,
+      );
+
   Future<void> triggerHwTest() async {
     final client = _ref.read(bleClientProvider);
     if (!client.isConnected) return;
@@ -1194,6 +1259,8 @@ class ScheduleNotifier extends StateNotifier<List<LightSchedule>> {
       state = const [];
     }
   }
+
+  void loadFromKv() => _load();
 
   void clearTransientState() {
     _incomingSchedulesBuffer.clear();
@@ -2059,6 +2126,8 @@ class DefaultModesNotifier extends StateNotifier<List<DefaultModeConfig>> {
     state = DefaultModeConfig.factoryDefaults;
   }
 
+  void loadFromKv() => _loadFromCache();
+
   void _persist() {
     unawaited(_kv.putJson(KvKeys.savedModes, state.map((m) => m.toJson()).toList()));
   }
@@ -2168,6 +2237,309 @@ class DefaultModesNotifier extends StateNotifier<List<DefaultModeConfig>> {
 
 final defaultModesProvider = StateNotifierProvider<DefaultModesNotifier, List<DefaultModeConfig>>((ref) {
   return DefaultModesNotifier(ref);
+});
+
+// ============================================================================
+// Presets & Multi-Segment Ranges Provider (>3 Modes)
+// ============================================================================
+
+class PresetsNotifier extends StateNotifier<List<LightPreset>> {
+  PresetsNotifier(this._ref) : super(LightPreset.defaultPresets()) {
+    _load();
+  }
+
+  final Ref _ref;
+  KvStore get _kv => _ref.read(kvStoreProvider);
+
+  void _load() {
+    final raw = _kv.getJsonList(KvKeys.savedPresets);
+    if (raw != null && raw.isNotEmpty) {
+      final list = raw.whereType<Map<String, dynamic>>().map(LightPreset.fromJson).toList();
+      if (list.isNotEmpty) {
+        state = list;
+        return;
+      }
+    }
+
+    // Transparent migration from savedModes if available
+    final legacyModes = _kv.getJsonList(KvKeys.savedModes);
+    if (legacyModes != null && legacyModes.isNotEmpty) {
+      final modes = legacyModes.whereType<Map<String, dynamic>>().map(DefaultModeConfig.fromJson).toList();
+      if (modes.isNotEmpty) {
+        state = modes.map((m) => LightPreset.fromLegacyDefaultMode(m)).toList();
+        _save();
+        return;
+      }
+    }
+
+    state = LightPreset.defaultPresets();
+  }
+
+  void loadFromKv() => _load();
+
+  Future<void> _save() async {
+    await _kv.putJson(KvKeys.savedPresets, state.map((p) => p.toJson()).toList());
+  }
+
+  void clearTransientState() {
+    _incomingBuffer.clear();
+  }
+
+  Future<void> onDeviceConnected() async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    try {
+      await client.writeWithoutResponse(
+        LightPacketEncoder.encodeGetPresets(),
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+    } catch (_) {}
+  }
+
+  final List<LightPreset> _incomingBuffer = [];
+
+  void handleIncomingPresetPacket(Map<String, dynamic> json) {
+    final type = json['type'] as String?;
+    if (type == 'preset_item') {
+      final p = LightPreset.fromJson(json);
+      _incomingBuffer.removeWhere((item) => item.index == p.index);
+      _incomingBuffer.add(p);
+    } else if (type == 'presets_end') {
+      if (_incomingBuffer.isNotEmpty) {
+        _incomingBuffer.sort((a, b) => a.index.compareTo(b.index));
+        state = List<LightPreset>.from(_incomingBuffer);
+        _incomingBuffer.clear();
+        _save();
+      }
+    }
+  }
+
+  Future<void> savePreset(LightPreset preset) async {
+    final existing = List<LightPreset>.from(state);
+    final idx = existing.indexWhere((p) => p.index == preset.index);
+    if (idx >= 0) {
+      existing[idx] = preset;
+    } else {
+      existing.add(preset);
+    }
+    existing.sort((a, b) => a.index.compareTo(b.index));
+    state = existing;
+    await _save();
+
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    try {
+      await client.writeWithoutResponse(
+        LightPacketEncoder.encodeSavePreset(preset),
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      _log.i('Saved preset ${preset.index} ("${preset.name}") to ESP32');
+    } catch (e) {
+      _log.e('Failed to send save_preset to ESP32: $e');
+    }
+  }
+
+  Future<void> addPreset(LightPreset preset) async {
+    final nextIdx = state.isEmpty ? 0 : (state.map((p) => p.index).reduce((a, b) => a > b ? a : b) + 1);
+    final p = preset.copyWith(index: nextIdx);
+    await savePreset(p);
+  }
+
+  Future<void> deletePreset(int index) async {
+    if (state.length <= 1) return;
+    final existing = List<LightPreset>.from(state)..removeWhere((p) => p.index == index);
+    state = existing;
+    await _save();
+  }
+
+  Future<void> resetToDefaults() async {
+    state = LightPreset.defaultPresets();
+    await _save();
+
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    try {
+      await client.writeWithoutResponse(
+        LightPacketEncoder.encodeResetPresets(),
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      _log.i('Reset presets on ESP32 to factory defaults');
+    } catch (e) {
+      _log.e('Failed to reset presets on ESP32: $e');
+    }
+  }
+
+  Future<void> activatePreset(int index) async {
+    await _ref.read(lightControlProvider.notifier).setPreset(index);
+    final p = state.where((item) => item.index == index).firstOrNull;
+    if (p != null) {
+      await _ref.read(lightControlProvider.notifier).setBrightness(p.brightness);
+    }
+  }
+}
+
+final presetsProvider = StateNotifierProvider<PresetsNotifier, List<LightPreset>>((ref) {
+  return PresetsNotifier(ref);
+});
+
+// ============================================================================
+// Multi-Room Management Provider
+// ============================================================================
+
+class RoomsNotifier extends StateNotifier<List<RoomModel>> {
+  RoomsNotifier(this._ref) : super(RoomModel.defaultRooms) {
+    _load();
+  }
+
+  final Ref _ref;
+  KvStore get _kv => _ref.read(kvStoreProvider);
+
+  void _load() {
+    final raw = _kv.getJsonList(KvKeys.savedRooms);
+    if (raw != null && raw.isNotEmpty) {
+      final list = raw.whereType<Map<String, dynamic>>().map(RoomModel.fromJson).toList();
+      if (list.isNotEmpty) {
+        state = list;
+        return;
+      }
+    }
+    state = RoomModel.defaultRooms;
+  }
+
+  void loadFromKv() => _load();
+
+  Future<void> _save() async {
+    await _kv.putJson(KvKeys.savedRooms, state.map((r) => r.toJson()).toList());
+  }
+
+  Future<void> addRoom(String name, {String icon = 'temple'}) async {
+    final id = 'room_${DateTime.now().millisecondsSinceEpoch}';
+    final room = RoomModel(id: id, name: name.trim(), iconName: icon);
+    state = [...state, room];
+    await _save();
+  }
+
+  Future<void> renameRoom(String roomId, String newName) async {
+    state = state.map((r) => r.id == roomId ? r.copyWith(name: newName.trim()) : r).toList();
+    await _save();
+  }
+
+  Future<void> deleteRoom(String roomId) async {
+    if (state.length <= 1) return;
+    state = state.where((r) => r.id != roomId).toList();
+    await _save();
+  }
+
+  Future<void> assignDeviceToRoom(String deviceId, String roomId) async {
+    state = state.map((r) {
+      final devs = List<String>.from(r.deviceIds)..remove(deviceId);
+      if (r.id == roomId) {
+        devs.add(deviceId);
+      }
+      return r.copyWith(deviceIds: devs);
+    }).toList();
+    await _save();
+
+    final pairedList = _ref.read(pairedDevicesProvider);
+    final dev = pairedList.where((d) => d.id == deviceId).firstOrNull;
+    if (dev != null) {
+      await _ref.read(pairedDevicesProvider.notifier).updateDeviceRoom(deviceId, roomId);
+    }
+  }
+
+  Future<void> toggleRoomPower(String roomId, bool on) => syncRoomPower(roomId, on);
+
+  Future<void> syncRoomPower(String roomId, bool on) async {
+    final pairedNotifier = _ref.read(pairedDevicesProvider.notifier);
+    final pairedList = _ref.read(pairedDevicesProvider);
+    final currentDevice = _ref.read(activeDeviceProvider);
+
+    for (final dev in pairedList) {
+      if (roomId == 'all' || dev.effectiveRoomId == roomId) {
+        await pairedNotifier.updateCachedState(
+          id: dev.id,
+          isOn: on,
+          brightness: on ? (dev.cachedBrightness ?? 255) : 0,
+        );
+      }
+    }
+
+    if (currentDevice != null && (roomId == 'all' || currentDevice.effectiveRoomId == roomId)) {
+      await _ref.read(lightControlProvider.notifier).setPower(on);
+    }
+  }
+
+  Future<void> syncRoomBrightness(String roomId, int brightness) async {
+    final pairedNotifier = _ref.read(pairedDevicesProvider.notifier);
+    final pairedList = _ref.read(pairedDevicesProvider);
+    final currentDevice = _ref.read(activeDeviceProvider);
+    final b = brightness.clamp(0, 255);
+
+    for (final dev in pairedList) {
+      if (roomId == 'all' || dev.effectiveRoomId == roomId) {
+        await pairedNotifier.updateCachedState(
+          id: dev.id,
+          brightness: b,
+          isOn: b > 0,
+        );
+      }
+    }
+
+    if (currentDevice != null && (roomId == 'all' || currentDevice.effectiveRoomId == roomId)) {
+      await _ref.read(lightControlProvider.notifier).commitBrightness(b);
+    }
+  }
+
+  Future<void> syncRoomScene(String roomId, SacredScene scene) async {
+    final pairedNotifier = _ref.read(pairedDevicesProvider.notifier);
+    final pairedList = _ref.read(pairedDevicesProvider);
+    final currentDevice = _ref.read(activeDeviceProvider);
+
+    for (final dev in pairedList) {
+      if (roomId == 'all' || dev.effectiveRoomId == roomId) {
+        await pairedNotifier.updateCachedState(
+          id: dev.id,
+          brightness: scene.brightness,
+          isOn: scene.brightness > 0,
+          r: scene.r,
+          g: scene.g,
+          b: scene.b,
+          transitionStyle: scene.transitionStyle,
+          ambientStyle: scene.ambientStyle,
+          ambientDepth: scene.ambientDepth,
+        );
+      }
+    }
+
+    if (currentDevice != null && (roomId == 'all' || currentDevice.effectiveRoomId == roomId)) {
+      final ctrl = _ref.read(lightControlProvider.notifier);
+      await ctrl.setAnimConfig(
+        transitionStyle: scene.transitionStyle,
+        ambientStyle: scene.ambientStyle,
+        ambientDepth: scene.ambientDepth,
+      );
+      await ctrl.setRgb(scene.r, scene.g, scene.b);
+      await ctrl.commitBrightness(scene.brightness);
+    }
+  }
+}
+
+final sacredScenesProvider = Provider<List<SacredScene>>((ref) {
+  return SacredScene.defaultScenes;
+});
+
+final roomsProvider = StateNotifierProvider<RoomsNotifier, List<RoomModel>>((ref) {
+  return RoomsNotifier(ref);
+});
+
+final activeRoomIdProvider = StateProvider<String?>((ref) {
+  return null;
 });
 
 // ============================================================================

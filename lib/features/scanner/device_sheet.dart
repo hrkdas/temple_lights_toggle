@@ -134,10 +134,142 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
     }
   }
 
+  Future<void> _showRoomAssignmentDialog(BuildContext context, PairedDevice device) async {
+    final rooms = ref.read(roomsProvider);
+    String selectedRoomId = device.effectiveRoomId;
+
+    final newRoomId = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDlgState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Icon(Icons.meeting_room_rounded, color: AppTheme.amber, size: 22),
+              const SizedBox(width: 8),
+              Text('Assign Room', style: AppTheme.heading(size: 17)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Assign "${device.displayName}" to a room to control multiple devices together:',
+                style: AppTheme.body(size: 13, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              ...rooms.map((room) {
+                final isSelected = selectedRoomId == room.id;
+                return InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => setDlgState(() => selectedRoomId = room.id),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? AppTheme.amber.withValues(alpha: 0.15) : AppTheme.surfaceRaised,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isSelected ? AppTheme.amber : AppTheme.border,
+                        width: isSelected ? 1.6 : 1.0,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Text(room.iconEmoji, style: const TextStyle(fontSize: 18)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(room.name, style: AppTheme.heading(size: 13.5)),
+                        ),
+                        if (isSelected)
+                          const Icon(Icons.check_circle_rounded, color: AppTheme.amber, size: 20),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.add_rounded, size: 16, color: AppTheme.cyan),
+                  label: Text('Create New Room', style: AppTheme.heading(size: 12, color: AppTheme.cyan)),
+                  onPressed: () async {
+                    final nameCtrl = TextEditingController();
+                    final created = await showDialog<String>(
+                      context: ctx,
+                      builder: (c2) => AlertDialog(
+                        backgroundColor: AppTheme.surface,
+                        title: Text('New Room Name', style: AppTheme.heading(size: 16)),
+                        content: TextField(
+                          controller: nameCtrl,
+                          autofocus: true,
+                          decoration: const InputDecoration(hintText: 'e.g. Guest Room, Balcony'),
+                        ),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.of(c2).pop(), child: const Text('Cancel')),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.amber),
+                            onPressed: () => Navigator.of(c2).pop(nameCtrl.text.trim()),
+                            child: const Text('Create', style: TextStyle(color: Colors.black)),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (created != null && created.isNotEmpty) {
+                      await ref.read(roomsProvider.notifier).addRoom(created);
+                      setDlgState(() {
+                        final updatedRooms = ref.read(roomsProvider);
+                        selectedRoomId = updatedRooms.last.id;
+                      });
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: AppTheme.body(size: 13, color: AppTheme.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.amber,
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(selectedRoomId),
+              child: Text('Assign', style: AppTheme.heading(size: 13, color: Colors.black)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (newRoomId != null) {
+      await ref.read(roomsProvider.notifier).assignDeviceToRoom(device.id, newRoomId);
+      if (context.mounted) {
+        final room = ref.read(roomsProvider).where((r) => r.id == newRoomId).firstOrNull;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Assigned "${device.displayName}" to ${room?.name ?? newRoomId}'),
+            backgroundColor: AppTheme.green,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scanner = ref.watch(scannerProvider);
     final paired = ref.watch(pairedDevicesProvider);
+    final rooms = ref.watch(roomsProvider);
     final kv = ref.watch(kvStoreProvider);
     final lastConnectedId = kv.getString(KvKeys.lastConnectedId);
     final connState = ref.watch(lightSessionProvider);
@@ -222,6 +354,7 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                             final scannedDev = scannedDevices.where((d) => d.id == p.id).firstOrNull;
                             final isCurrentlyConnected = connState.isConnected && connState.deviceId == p.id;
                             final isConnecting = _connectingId == p.id || (connState.isConnecting && connState.deviceId == p.id);
+                            final room = rooms.where((r) => r.id == p.effectiveRoomId).firstOrNull;
 
                             return Container(
                               margin: const EdgeInsets.only(bottom: 10),
@@ -311,16 +444,44 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                         ],
                                       ],
                                     ),
-                                    if (p.customAlias != null && p.customAlias!.isNotEmpty && p.customAlias != p.name)
-                                      Text(
-                                        '${p.name} • ${p.effectiveLedCount} LEDs (${p.formattedLength})',
-                                        style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
-                                      )
-                                    else
-                                      Text(
-                                        '${p.effectiveLedCount} LEDs (${p.formattedLength})',
-                                        style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
-                                      ),
+                                    Wrap(
+                                      crossAxisAlignment: WrapCrossAlignment.center,
+                                      spacing: 6,
+                                      children: [
+                                        if (p.customAlias != null && p.customAlias!.isNotEmpty && p.customAlias != p.name)
+                                          Text(
+                                            '${p.name} • ${p.effectiveLedCount} LEDs (${p.formattedLength})',
+                                            style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
+                                          )
+                                        else
+                                          Text(
+                                            '${p.effectiveLedCount} LEDs (${p.formattedLength})',
+                                            style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
+                                          ),
+                                        InkWell(
+                                          onTap: () => _showRoomAssignmentDialog(context, p),
+                                          borderRadius: BorderRadius.circular(6),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                            decoration: BoxDecoration(
+                                              color: AppTheme.surface,
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: AppTheme.amber.withValues(alpha: 0.35)),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(room?.iconEmoji ?? '🛕', style: const TextStyle(fontSize: 9.5)),
+                                                const SizedBox(width: 4),
+                                                Text(room?.name ?? 'Puja Mandir', style: AppTheme.heading(size: 9.5, color: AppTheme.amber)),
+                                                const SizedBox(width: 2),
+                                                const Icon(Icons.arrow_drop_down, size: 12, color: AppTheme.textMuted),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
                                 subtitle: Padding(

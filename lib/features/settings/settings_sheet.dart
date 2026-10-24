@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../contract/light_contract.dart';
 import '../../core/log.dart';
@@ -100,6 +101,111 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close', style: TextStyle(color: AppTheme.cyan)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportBackup() async {
+    final backupService = ref.read(backupServiceProvider);
+    final jsonStr = backupService.createBackupJson();
+    await Clipboard.setData(ClipboardData(text: jsonStr));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Database backup copied to clipboard! (JSON snapshot)'),
+        backgroundColor: AppTheme.green,
+        duration: Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showRestoreDialog() {
+    final textController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.settings_backup_restore_rounded, color: AppTheme.amber, size: 22),
+            const SizedBox(width: 8),
+            Text('Restore Database', style: AppTheme.heading(size: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Paste a valid backup JSON string below. Full backward compatibility is guaranteed for older schemas.',
+              style: AppTheme.body(size: 13, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textController,
+              maxLines: 6,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppTheme.textPrimary),
+              decoration: InputDecoration(
+                hintText: '{\n  "version": 2,\n  "devices": [...],\n  "presets": [...]\n}',
+                hintStyle: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppTheme.textMuted),
+                filled: true,
+                fillColor: AppTheme.surfaceRaised,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.border)),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.border)),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.amber)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: AppTheme.body(size: 13, color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.amber,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () async {
+              final jsonText = textController.text.trim();
+              if (jsonText.isEmpty) return;
+              try {
+                final backupService = ref.read(backupServiceProvider);
+                final result = await backupService.restoreBackupJson(jsonText, ref: ref);
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Successfully restored ${result.devicesRestored} devices, ${result.presetsRestored} presets, ${result.roomsRestored} rooms!',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: AppTheme.green,
+                      duration: const Duration(seconds: 4),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to restore backup: $e'),
+                      backgroundColor: AppTheme.red,
+                      duration: const Duration(seconds: 4),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              }
+            },
+            child: Text('Restore Now', style: AppTheme.heading(size: 13, color: Colors.black)),
           ),
         ],
       ),
@@ -593,6 +699,81 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                             OtaUpdateScreen.open(context);
                           },
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Database Backup & Safe Restore Card
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceRaised,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.cyan.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.cloud_sync_rounded, size: 20, color: AppTheme.cyan),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Database Backup & Restore', style: AppTheme.heading(size: 15)),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Export JSON snapshot or restore with 100% backward compatibility',
+                                  style: AppTheme.body(size: 11.5, color: AppTheme.textSecondary),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.upload_rounded, size: 16),
+                              label: Text('Export JSON', style: AppTheme.heading(size: 12)),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: AppTheme.borderBright),
+                                foregroundColor: AppTheme.textPrimary,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              onPressed: _exportBackup,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.settings_backup_restore_rounded, size: 16, color: Colors.black),
+                              label: Text('Restore Backup', style: AppTheme.heading(size: 12, color: Colors.black)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.amber,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: 1,
+                              ),
+                              onPressed: _showRestoreDialog,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),

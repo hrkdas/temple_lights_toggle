@@ -147,6 +147,61 @@ static ModeConfig defaultModes[3] = {
     { "Pure White",  255, 255, 255, 0, 255 }
 };
 
+// ============================================================================
+// DYNAMIC PRESETS & MULTI-SEGMENT RANGE CONFIG
+// ============================================================================
+#define MAX_PRESETS               16
+#define MAX_SEGMENTS_PER_PRESET   8
+#define MAX_ACTIVE_SEGMENTS       16
+
+struct FirmwareLedSegment {
+    uint16_t start;       // 0-indexed start LED
+    uint16_t count;       // Number of LEDs in range
+    uint8_t r;            // Segment base Red (0..255)
+    uint8_t g;            // Segment base Green (0..255)
+    uint8_t b;            // Segment base Blue (0..255)
+    uint8_t brightness;   // Segment brightness multiplier (0..255)
+    uint8_t effect;       // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Embers, 5=Aurora, 6=Rainbow
+    uint8_t speed;        // Effect frequency/speed multiplier (1..10)
+    char name[16];
+
+    FirmwareLedSegment() : start(0), count(0), r(255), g(147), b(41), brightness(255), effect(0), speed(5) {
+        name[0] = '\0';
+    }
+
+    FirmwareLedSegment(uint16_t s, uint16_t c, uint8_t red, uint8_t green, uint8_t blue, uint8_t br, uint8_t fx, uint8_t spd, const char* n = "")
+        : start(s), count(c), r(red), g(green), b(blue), brightness(br), effect(fx), speed(spd) {
+        if (n != nullptr) {
+            strncpy(name, n, sizeof(name) - 1);
+            name[sizeof(name) - 1] = '\0';
+        } else {
+            name[0] = '\0';
+        }
+    }
+};
+
+struct FirmwarePreset {
+    char name[24];
+    uint8_t brightness;     // 1..255
+    uint8_t transitionStyle;// 0..6
+    uint8_t ambientStyle;   // 0..6
+    uint8_t ambientDepth;   // 0..30 (%)
+    bool cycleEnabled;      // Participates in physical power-cycle toggle
+    uint8_t r;              // Global/Fallback RGB
+    uint8_t g;
+    uint8_t b;
+    uint8_t segmentCount;
+    FirmwareLedSegment segments[MAX_SEGMENTS_PER_PRESET];
+};
+
+static FirmwarePreset presets[MAX_PRESETS];
+static int presetCount = 3;
+static uint8_t activePresetIndex = 0;
+static uint16_t cycleBitmask = 0x07; // By default, presets 0, 1, 2 participate in wall toggle
+
+static FirmwareLedSegment activeSegments[MAX_ACTIVE_SEGMENTS];
+static int activeSegmentCount = 0;
+
 enum AnimType {
     ANIM_NONE = 0,
     ANIM_CENTER_ON,
@@ -269,6 +324,13 @@ void save_modes_to_nvs();
 void load_modes_from_nvs();
 void reset_modes_to_defaults();
 void send_modes_hydration_to_app();
+void save_presets_to_nvs();
+void load_presets_from_nvs();
+void reset_presets_to_defaults();
+void send_presets_hydration_to_app();
+uint8_t get_next_cycle_preset(uint8_t current);
+void activate_preset(uint8_t idx);
+int extract_json_segments(const String& json, FirmwareLedSegment* outSegments, int maxSegments);
 void evaluate_schedules();
 void save_hw_config();
 void save_anim_config();
@@ -368,6 +430,171 @@ void reset_modes_to_defaults() {
     memcpy(defaultModes, FACTORY_DEFAULT_MODES, sizeof(defaultModes));
     save_modes_to_nvs();
     Serial.println("[NVS] Reset default modes to factory defaults");
+}
+
+// ============================================================================
+// NVS PERSISTENCE FOR DYNAMIC PRESETS (>3 MODES & MULTI-SEGMENT RANGES)
+// ============================================================================
+void load_presets_from_nvs() {
+    prefs.begin("tl_presets", false);
+    if (!prefs.isKey("p_count")) {
+        // Auto-migration from legacy tl_modes!
+        Serial.println("[NVS] Migrating legacy modes to tl_presets...");
+        presetCount = 5;
+
+        // Preset 0: Full Warm
+        strncpy(presets[0].name, defaultModes[0].name, sizeof(presets[0].name) - 1);
+        presets[0].name[sizeof(presets[0].name) - 1] = '\0';
+        presets[0].brightness = defaultModes[0].brightness;
+        presets[0].transitionStyle = 0;
+        presets[0].ambientStyle = 1;
+        presets[0].ambientDepth = 6;
+        presets[0].cycleEnabled = true;
+        presets[0].r = defaultModes[0].r;
+        presets[0].g = defaultModes[0].g;
+        presets[0].b = defaultModes[0].b;
+        presets[0].segmentCount = 1;
+        presets[0].segments[0] = { 0, (uint16_t)numLeds, defaultModes[0].r, defaultModes[0].g, defaultModes[0].b, defaultModes[0].brightness, 0, 5, "Full Warm" };
+
+        // Preset 1: Center Focus 1.5m
+        strncpy(presets[1].name, defaultModes[1].name, sizeof(presets[1].name) - 1);
+        presets[1].name[sizeof(presets[1].name) - 1] = '\0';
+        presets[1].brightness = defaultModes[1].brightness;
+        presets[1].transitionStyle = 0;
+        presets[1].ambientStyle = 1;
+        presets[1].ambientDepth = 6;
+        presets[1].cycleEnabled = true;
+        presets[1].r = defaultModes[1].r;
+        presets[1].g = defaultModes[1].g;
+        presets[1].b = defaultModes[1].b;
+        presets[1].segmentCount = 1;
+        uint16_t midStart = (uint16_t)((numLeds * 0.20f) + 0.5f);
+        uint16_t midCount = (numLeds > (midStart * 2)) ? (numLeds - (midStart * 2)) : numLeds;
+        presets[1].segments[0] = { midStart, midCount, defaultModes[1].r, defaultModes[1].g, defaultModes[1].b, defaultModes[1].brightness, 0, 5, "Center 1.5m" };
+
+        // Preset 2: Pure White
+        strncpy(presets[2].name, defaultModes[2].name, sizeof(presets[2].name) - 1);
+        presets[2].name[sizeof(presets[2].name) - 1] = '\0';
+        presets[2].brightness = defaultModes[2].brightness;
+        presets[2].transitionStyle = 0;
+        presets[2].ambientStyle = 1;
+        presets[2].ambientDepth = 6;
+        presets[2].cycleEnabled = true;
+        presets[2].r = defaultModes[2].r;
+        presets[2].g = defaultModes[2].g;
+        presets[2].b = defaultModes[2].b;
+        presets[2].segmentCount = 1;
+        presets[2].segments[0] = { 0, (uint16_t)numLeds, defaultModes[2].r, defaultModes[2].g, defaultModes[2].b, defaultModes[2].brightness, 0, 5, "Full White" };
+
+        // Preset 3: Pillar Base (1-6) & Apex (100-105)
+        strncpy(presets[3].name, "Pillar & Halo", sizeof(presets[3].name) - 1);
+        presets[3].name[sizeof(presets[3].name) - 1] = '\0';
+        presets[3].brightness = 255;
+        presets[3].transitionStyle = 3; // Convergence
+        presets[3].ambientStyle = 2;    // Diya Flame Flutter
+        presets[3].ambientDepth = 8;
+        presets[3].cycleEnabled = false;
+        presets[3].r = 255; presets[3].g = 180; presets[3].b = 0;
+        presets[3].segmentCount = 2;
+        presets[3].segments[0] = { 0, 6, 255, 147, 41, 255, 0, 5, "Base 1-6" };
+        uint16_t endStart = (numLeds >= 106) ? 100 : (numLeds > 6 ? numLeds - 6 : 0);
+        presets[3].segments[1] = { endStart, 6, 255, 255, 255, 255, 2, 5, "Apex 100-105" };
+
+        // Preset 4: Sacred Aarti Fire Embers
+        strncpy(presets[4].name, "Aarti Fire Embers", sizeof(presets[4].name) - 1);
+        presets[4].name[sizeof(presets[4].name) - 1] = '\0';
+        presets[4].brightness = 240;
+        presets[4].transitionStyle = 4; // Sparkle ignition
+        presets[4].ambientStyle = 4;    // Sacred amber embers
+        presets[4].ambientDepth = 10;
+        presets[4].cycleEnabled = false;
+        presets[4].r = 255; presets[4].g = 120; presets[4].b = 20;
+        presets[4].segmentCount = 1;
+        presets[4].segments[0] = { 0, (uint16_t)numLeds, 255, 120, 20, 255, 4, 5, "Sacred Fire" };
+
+        cycleBitmask = 0x07; // presets 0, 1, 2 enabled for power cycle
+        prefs.putInt("p_count", presetCount);
+        prefs.putUShort("cycle_mask", cycleBitmask);
+        for (int i = 0; i < presetCount; i++) {
+            String k = "p_" + String(i);
+            prefs.putBytes(k.c_str(), &presets[i], sizeof(FirmwarePreset));
+        }
+        prefs.end();
+        Serial.println("[NVS] Migration to tl_presets completed.");
+        return;
+    }
+
+    presetCount = prefs.getInt("p_count", 3);
+    if (presetCount < 1) presetCount = 1;
+    if (presetCount > MAX_PRESETS) presetCount = MAX_PRESETS;
+    cycleBitmask = prefs.getUShort("cycle_mask", 0x07);
+
+    for (int i = 0; i < presetCount; i++) {
+        String k = "p_" + String(i);
+        if (prefs.isKey(k.c_str())) {
+            prefs.getBytes(k.c_str(), &presets[i], sizeof(FirmwarePreset));
+            presets[i].name[sizeof(presets[i].name) - 1] = '\0';
+        }
+    }
+    prefs.end();
+    Serial.printf("[NVS] Loaded %d presets from tl_presets (cycleMask=0x%02X)\n", presetCount, cycleBitmask);
+}
+
+void save_presets_to_nvs() {
+    prefs.begin("tl_presets", false);
+    prefs.putInt("p_count", presetCount);
+    prefs.putUShort("cycle_mask", cycleBitmask);
+    for (int i = 0; i < presetCount; i++) {
+        String k = "p_" + String(i);
+        prefs.putBytes(k.c_str(), &presets[i], sizeof(FirmwarePreset));
+    }
+    for (int i = presetCount; i < MAX_PRESETS; i++) {
+        String k = "p_" + String(i);
+        if (prefs.isKey(k.c_str())) prefs.remove(k.c_str());
+    }
+    prefs.end();
+    Serial.printf("[NVS] Saved %d presets to tl_presets\n", presetCount);
+}
+
+void reset_presets_to_defaults() {
+    prefs.begin("tl_presets", false);
+    prefs.clear();
+    prefs.end();
+    load_presets_from_nvs();
+    Serial.println("[NVS] Reset presets to factory defaults");
+}
+
+uint8_t get_next_cycle_preset(uint8_t current) {
+    if (presetCount <= 1) return 0;
+    // Inspect next enabled preset in power-cycle carousel
+    for (int step = 1; step <= presetCount; step++) {
+        uint8_t candidate = (current + step) % presetCount;
+        if (presets[candidate].cycleEnabled) {
+            return candidate;
+        }
+    }
+    // Fallback: advance cyclically within active count
+    return (current + 1) % ((presetCount > 3) ? 3 : presetCount);
+}
+
+void activate_preset(uint8_t idx) {
+    if (idx >= presetCount) idx = 0;
+    activePresetIndex = idx;
+    currentMode = (idx < 3) ? idx : 3;
+    const auto& p = presets[idx];
+    targetBrightness = (p.brightness > 0) ? p.brightness : 255;
+    brightness = targetBrightness;
+    activeBrightness = targetBrightness;
+    currentBrightness = (float)brightness;
+    transitionStyle = p.transitionStyle;
+    ambientStyle = p.ambientStyle;
+    ambientDepth = p.ambientDepth;
+
+    activeSegmentCount = p.segmentCount;
+    for (int s = 0; s < activeSegmentCount; s++) {
+        activeSegments[s] = p.segments[s];
+    }
+    customR = p.r; customG = p.g; customB = p.b;
 }
 
 // ============================================================================
@@ -533,15 +760,23 @@ float ease_smootherstep(float t) {
 }
 
 float get_normalized_spatial_dist(int i, int totalLeds) {
-    if (transitionStyle == 1) {
-        // Linear Sweep (Sunrise Flow from one end to another)
-        return (totalLeds <= 1) ? 0.0f : ((float)i / (float)(totalLeds - 1));
-    } else if (transitionStyle == 2) {
-        // Instant Smooth Fade (all LEDs simultaneously fade without wave delay)
-        return 0.0f;
-    } else {
-        // Default (0): Center-Out Dawn
-        return get_normalized_center_dist(i, totalLeds);
+    if (totalLeds <= 1) return 0.0f;
+    switch (transitionStyle) {
+        case 1: // Sunrise Flow (Left to Right)
+            return (float)i / (float)(totalLeds - 1);
+        case 2: // Uniform Smooth Fade
+            return 0.0f;
+        case 3: // Sunset Cascade (Right to Left)
+            return 1.0f - ((float)i / (float)(totalLeds - 1));
+        case 4: // Dual Convergence (Ends moving to center)
+            return 1.0f - get_normalized_center_dist(i, totalLeds);
+        case 5: // Sparkle Ignition (Pseudo-random hash)
+            return (float)((i * 37 + 13) % 100) / 100.0f;
+        case 6: // Segment Domino (step quantize)
+            return (float)((i * 5) / totalLeds) * 0.20f;
+        case 0: // Center-Out Dawn
+        default:
+            return get_normalized_center_dist(i, totalLeds);
     }
 }
 
@@ -560,21 +795,69 @@ float get_ambient_factor(unsigned long now) {
     }
 
     if (ambientStyle == 2) { // Sacred Diya / Candle Flame Flutter
-        if (now - lastDiyaUpdateMs >= 60) {
+        if (now - lastDiyaUpdateMs >= 50) {
             lastDiyaUpdateMs = now;
             float depth = (float)ambientDepth / 100.0f;
-            float rnd = (float)(esp_random() % 1000) / 1000.0f;
-            diyaTargetFactor = 1.0f - (depth * rnd);
+            float r1 = (float)(esp_random() % 1000) / 1000.0f;
+            float r2 = (float)(esp_random() % 1000) / 1000.0f;
+            float flameVal = (r1 * 0.7f + r2 * 0.3f);
+            diyaTargetFactor = 1.0f - (depth * flameVal);
         }
         // Smooth exponential moving average low-pass filter (25% per 20ms frame)
         diyaCurrentFactor += (diyaTargetFactor - diyaCurrentFactor) * 0.25f;
         return diyaCurrentFactor;
     }
 
+    if (ambientStyle == 3) { // Starlight Twinkle
+        float depth = (float)ambientDepth / 100.0f;
+        float phase = (float)(now % 1800) * (2.0f * 3.14159265f / 1800.0f);
+        return 1.0f - (depth * 0.35f * (1.0f - sinf(phase)));
+    }
+
+    if (ambientStyle == 4) { // Sacred Amber Embers
+        unsigned long elapsed = now - breathingBaseMs;
+        float depth = (float)ambientDepth / 100.0f;
+        float slowWave = 0.5f * (1.0f + sinf((float)(elapsed % 4200) * (2.0f * 3.14159265f / 4200.0f)));
+        float fastPulse = 0.5f * (1.0f + sinf((float)(elapsed % 950) * (2.0f * 3.14159265f / 950.0f)));
+        return 1.0f - (depth * (0.6f * slowWave + 0.4f * fastPulse));
+    }
+
+    if (ambientStyle == 5) { // Aurora Flow
+        unsigned long elapsed = now - breathingBaseMs;
+        float depth = (float)ambientDepth / 100.0f;
+        float wave = 0.5f * (1.0f + sinf((float)(elapsed % 5000) * (2.0f * 3.14159265f / 5000.0f)));
+        return 1.0f - (depth * 0.5f * wave);
+    }
+
+    if (ambientStyle == 6) { // Rainbow Cycle
+        return 1.0f;
+    }
+
     return 1.0f;
 }
 
 void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbColor* out) {
+    if (activeSegmentCount > 0) {
+        // Multi-Segment arbitrary selection mode!
+        for (int i = 0; i < numLeds; i++) {
+            out[i] = { 0, 0, 0 }; // Unassigned LEDs remain off
+        }
+        for (int s = 0; s < activeSegmentCount; s++) {
+            const auto& seg = activeSegments[s];
+            int sEnd = seg.start + seg.count;
+            if (sEnd > numLeds) sEnd = numLeds;
+            float sBright = (float)seg.brightness / 255.0f;
+            for (int i = seg.start; i < sEnd; i++) {
+                out[i] = {
+                    (uint8_t)(seg.r * sBright + 0.5f),
+                    (uint8_t)(seg.g * sBright + 0.5f),
+                    (uint8_t)(seg.b * sBright + 0.5f)
+                };
+            }
+        }
+        return;
+    }
+
     int midStart = (int)((numLeds * 0.20f) + 0.5f);
     int midEnd   = numLeds - 1 - midStart;
 
@@ -601,9 +884,52 @@ void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbCol
         return;
     }
 
+    // Dynamic preset index >= 4
+    if (mode < presetCount) {
+        const auto& p = presets[mode];
+        if (p.segmentCount > 0) {
+            for (int i = 0; i < numLeds; i++) out[i] = { 0, 0, 0 };
+            for (int s = 0; s < p.segmentCount; s++) {
+                const auto& seg = p.segments[s];
+                int sEnd = seg.start + seg.count;
+                if (sEnd > numLeds) sEnd = numLeds;
+                float sBright = (float)seg.brightness / 255.0f;
+                for (int i = seg.start; i < sEnd; i++) {
+                    out[i] = {
+                        (uint8_t)(seg.r * sBright + 0.5f),
+                        (uint8_t)(seg.g * sBright + 0.5f),
+                        (uint8_t)(seg.b * sBright + 0.5f)
+                    };
+                }
+            }
+            return;
+        } else {
+            for (int i = 0; i < numLeds; i++) out[i] = { p.r, p.g, p.b };
+            return;
+        }
+    }
+
     for (int i = 0; i < numLeds; i++)
         out[i] = { WARM_R, WARM_G, WARM_B };
 }
+
+// 256-entry Gamma 2.2 Perceptual Color Correction Lookup Table
+static const uint8_t GAMMA_TABLE_22[256] = {
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,   1,   1,   1,   1,
+    1,   1,   1,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   4,   4,   4,
+    5,   5,   5,   5,   6,   6,   6,   7,   7,   7,   8,   8,   8,   9,   9,   10,
+    10,  11,  11,  11,  12,  12,  13,  13,  14,  14,  15,  15,  16,  17,  17,  18,
+    18,  19,  20,  20,  21,  21,  22,  23,  23,  24,  25,  25,  26,  27,  28,  28,
+    29,  30,  31,  32,  32,  33,  34,  35,  36,  37,  37,  38,  39,  40,  41,  42,
+    43,  44,  45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,
+    60,  61,  62,  63,  64,  65,  67,  68,  69,  70,  71,  73,  74,  75,  76,  78,
+    79,  80,  82,  83,  84,  86,  87,  88,  90,  91,  93,  94,  96,  97,  98, 100,
+   101, 103, 104, 106, 107, 109, 111, 112, 114, 115, 117, 119, 120, 122, 124, 125,
+   127, 129, 131, 132, 134, 136, 138, 140, 142, 143, 145, 147, 149, 151, 153, 155,
+   157, 159, 161, 163, 165, 167, 170, 172, 174, 176, 178, 180, 183, 185, 187, 190,
+   192, 194, 197, 199, 201, 204, 206, 209, 211, 213, 216, 218, 221, 223, 226, 228,
+   231, 234, 236, 239, 241, 244, 247, 249, 252, 255
+};
 
 void render_frame(unsigned long now) {
     if (brightness == 0 && currentAnim == ANIM_NONE && currentBrightness <= 0.01f) {
@@ -654,7 +980,7 @@ void render_frame(unsigned long now) {
         uint8_t g = (uint8_t)(currentLeds[i].g * brightMult + 0.5f);
         uint8_t b = (uint8_t)(currentLeds[i].b * brightMult + 0.5f);
         renderedLeds[i] = { r, g, b };
-        strip.setPixelColor(i, r, g, b);
+        strip.setPixelColor(i, GAMMA_TABLE_22[r], GAMMA_TABLE_22[g], GAMMA_TABLE_22[b]);
     }
     // Clear any extra pixels if previously longer
     for (int i = numLeds; i < MAX_LEDS; i++) {
@@ -919,7 +1245,10 @@ void notify_state() {
                  ",\"max_ma\":" + String(maxCurrentMa) +
                  ",\"trans\":" + String(transitionStyle) +
                  ",\"amb\":" + String(ambientStyle) +
-                 ",\"depth\":" + String(ambientDepth) + "}";
+                 ",\"depth\":" + String(ambientDepth) +
+                 ",\"preset\":" + String(activePresetIndex) +
+                 ",\"segs\":" + String(activeSegmentCount) +
+                 ",\"cycle_mask\":" + String(cycleBitmask) + "}";
     pCharacteristic->setValue((uint8_t*)pkt.c_str(), pkt.length());
     pCharacteristic->notify();
 }
@@ -1356,6 +1685,52 @@ void send_modes_hydration_to_app() {
     delay(35);
 }
 
+void send_presets_hydration_to_app() {
+    if (!deviceConnected || pCharacteristic == nullptr) return;
+
+    for (int i = 0; i < presetCount; i++) {
+        const auto& p = presets[i];
+        String pkt = "{\"type\":\"preset_item\",\"idx\":" + String(i) +
+                     ",\"total\":" + String(presetCount) +
+                     ",\"name\":\"" + String(p.name) + "\"" +
+                     ",\"bright\":" + String(p.brightness) +
+                     ",\"trans\":" + String(p.transitionStyle) +
+                     ",\"amb\":" + String(p.ambientStyle) +
+                     ",\"depth\":" + String(p.ambientDepth) +
+                     ",\"cycle\":" + String(p.cycleEnabled ? "true" : "false") +
+                     ",\"r\":" + String(p.r) +
+                     ",\"g\":" + String(p.g) +
+                     ",\"b\":" + String(p.b) +
+                     ",\"segs\":[";
+        for (int s = 0; s < p.segmentCount; s++) {
+            if (s > 0) pkt += ",";
+            const auto& seg = p.segments[s];
+            pkt += "{\"start\":" + String(seg.start) +
+                   ",\"count\":" + String(seg.count) +
+                   ",\"r\":" + String(seg.r) +
+                   ",\"g\":" + String(seg.g) +
+                   ",\"b\":" + String(seg.b) +
+                   ",\"bright\":" + String(seg.brightness) +
+                   ",\"fx\":" + String(seg.effect) +
+                   ",\"spd\":" + String(seg.speed);
+            if (strlen(seg.name) > 0) {
+                pkt += ",\"name\":\"" + String(seg.name) + "\"";
+            }
+            pkt += "}";
+        }
+        pkt += "]}";
+        pCharacteristic->setValue((uint8_t*)pkt.c_str(), pkt.length());
+        pCharacteristic->notify();
+        delay(35);
+    }
+
+    String endPkt = "{\"type\":\"presets_end\",\"count\":" + String(presetCount) +
+                    ",\"cycle_mask\":" + String(cycleBitmask) + "}";
+    pCharacteristic->setValue((uint8_t*)endPkt.c_str(), endPkt.length());
+    pCharacteristic->notify();
+    delay(35);
+}
+
 // ============================================================================
 // LIGHTWEIGHT JSON EXTRACTORS
 // ============================================================================
@@ -1417,6 +1792,39 @@ uint8_t extract_repeat_days_mask(const String& json) {
     return mask == 0 ? 0xFE : mask;
 }
 
+int extract_json_segments(const String& json, FirmwareLedSegment* outSegments, int maxSegments) {
+    int count = 0;
+    int segsIdx = json.indexOf("\"segs\"");
+    if (segsIdx == -1) return 0;
+    int arrayStart = json.indexOf('[', segsIdx);
+    if (arrayStart == -1) return 0;
+    int arrayEnd = json.indexOf(']', arrayStart);
+    if (arrayEnd == -1) return 0;
+
+    int objStart = json.indexOf('{', arrayStart);
+    while (objStart != -1 && objStart < arrayEnd && count < maxSegments) {
+        int objEnd = json.indexOf('}', objStart);
+        if (objEnd == -1 || objEnd > arrayEnd) break;
+        String obj = json.substring(objStart, objEnd + 1);
+
+        outSegments[count].start = extract_json_int(obj, "start", 0);
+        outSegments[count].count = extract_json_int(obj, "count", 1);
+        outSegments[count].r = extract_json_int(obj, "r", 255);
+        outSegments[count].g = extract_json_int(obj, "g", 147);
+        outSegments[count].b = extract_json_int(obj, "b", 41);
+        outSegments[count].brightness = extract_json_int(obj, "bright", 255);
+        outSegments[count].effect = extract_json_int(obj, "fx", 0);
+        outSegments[count].speed = extract_json_int(obj, "spd", 5);
+        String nameStr = extract_json_string(obj, "name");
+        strncpy(outSegments[count].name, nameStr.c_str(), sizeof(outSegments[count].name) - 1);
+        outSegments[count].name[sizeof(outSegments[count].name) - 1] = '\0';
+        count++;
+
+        objStart = json.indexOf('{', objEnd + 1);
+    }
+    return count;
+}
+
 // ============================================================================
 // COMMAND HANDLER
 // ============================================================================
@@ -1425,6 +1833,107 @@ void handle_command(const String& json) {
     Serial.printf("[BLE] Command: %s\n", cmd.c_str());
 
     // 1. LED State Controls
+    if (cmd == "set_preset") {
+        int idx = extract_json_int(json, "idx", -1);
+        if (idx >= 0 && idx < presetCount) {
+            bool wasOff = (brightness == 0);
+            activate_preset(idx);
+            if (wasOff) {
+                start_center_on_animation();
+                record_light_log(true, "App Preset Select");
+            } else {
+                start_crossfade_animation();
+            }
+            stateDirty = true;
+            lastStateChangeMs = millis();
+            notify_state();
+            Serial.printf("[Preset] Active → %d ('%s')\n", idx, presets[idx].name);
+        }
+        return;
+    }
+
+    if (cmd == "get_presets") {
+        send_presets_hydration_to_app();
+        return;
+    }
+
+    if (cmd == "save_preset") {
+        int idx = extract_json_int(json, "idx", -1);
+        if (idx >= 0 && idx < MAX_PRESETS) {
+            if (idx >= presetCount) {
+                presetCount = idx + 1;
+            }
+            FirmwarePreset& p = presets[idx];
+            String nameStr = extract_json_string(json, "name");
+            if (nameStr.length() > 0) {
+                strncpy(p.name, nameStr.c_str(), sizeof(p.name) - 1);
+                p.name[sizeof(p.name) - 1] = '\0';
+            }
+            p.brightness = extract_json_int(json, "bright", 255);
+            p.transitionStyle = extract_json_int(json, "trans", 0);
+            p.ambientStyle = extract_json_int(json, "amb", 1);
+            p.ambientDepth = extract_json_int(json, "depth", 6);
+            p.cycleEnabled = extract_json_bool(json, "cycle", true);
+            p.r = extract_json_int(json, "r", 255);
+            p.g = extract_json_int(json, "g", 147);
+            p.b = extract_json_int(json, "b", 41);
+
+            int segCount = extract_json_segments(json, p.segments, MAX_SEGMENTS_PER_PRESET);
+            p.segmentCount = segCount;
+
+            save_presets_to_nvs();
+
+            if (idx < 3) {
+                strncpy(defaultModes[idx].name, p.name, sizeof(defaultModes[idx].name) - 1);
+                defaultModes[idx].brightness = p.brightness;
+                defaultModes[idx].r = p.r;
+                defaultModes[idx].g = p.g;
+                defaultModes[idx].b = p.b;
+                save_modes_to_nvs();
+            }
+
+            if (idx == activePresetIndex) {
+                activate_preset(idx);
+                start_crossfade_animation();
+                notify_state();
+            }
+
+            send_presets_hydration_to_app();
+            Serial.printf("[Preset] Saved Preset %d ('%s', %d segs, cycle=%d)\n",
+                          idx, p.name, p.segmentCount, p.cycleEnabled ? 1 : 0);
+        }
+        return;
+    }
+
+    if (cmd == "set_segs") {
+        activeSegmentCount = extract_json_segments(json, activeSegments, MAX_ACTIVE_SEGMENTS);
+        currentMode = 3;
+        start_crossfade_animation();
+        notify_state();
+        Serial.printf("[Segment] Live configured %d segments\n", activeSegmentCount);
+        return;
+    }
+
+    if (cmd == "set_cycle") {
+        cycleBitmask = (uint16_t)extract_json_int(json, "mask", 0x07);
+        for (int i = 0; i < presetCount; i++) {
+            presets[i].cycleEnabled = (cycleBitmask & (1 << i)) != 0;
+        }
+        save_presets_to_nvs();
+        send_presets_hydration_to_app();
+        Serial.printf("[Cycle] Mask updated: 0x%02X\n", cycleBitmask);
+        return;
+    }
+
+    if (cmd == "reset_presets") {
+        reset_presets_to_defaults();
+        activate_preset(0);
+        start_crossfade_animation();
+        notify_state();
+        send_presets_hydration_to_app();
+        return;
+    }
+
     if (cmd == "set_mode") {
         int m = extract_json_int(json, "mode", -1);
         if (m >= 0 && m <= 3) {
@@ -1502,15 +2011,8 @@ void handle_command(const String& json) {
     }
 
     if (cmd == "on") {
-        // Switch ON: advance to next mode and loop among the 3 preset states (0 -> 1 -> 2 -> 0)
-        if (currentMode >= 2) {
-            currentMode = 0;
-        } else {
-            currentMode++;
-        }
-        targetBrightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
-        brightness = targetBrightness;
-        activeBrightness = targetBrightness;
+        uint8_t nextMode = get_next_cycle_preset(currentMode);
+        activate_preset(nextMode);
         start_center_on_animation();
         stateDirty = true;
         lastStateChangeMs = millis();
@@ -1521,15 +2023,8 @@ void handle_command(const String& json) {
     }
 
     if (cmd == "next_mode") {
-        // Cycle among the 3 preset states (0 -> 1 -> 2 -> 0)
-        if (currentMode >= 2) {
-            currentMode = 0;
-        } else {
-            currentMode++;
-        }
-        targetBrightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
-        brightness = targetBrightness;
-        activeBrightness = targetBrightness;
+        uint8_t nextMode = get_next_cycle_preset(currentMode);
+        activate_preset(nextMode);
         bool wasOff = (currentBrightness <= 0.5f);
         if (wasOff) {
             start_center_on_animation();
@@ -2222,21 +2717,15 @@ void setup() {
     load_state();
     load_hw_and_anim_config();
     load_modes_from_nvs();
+    load_presets_from_nvs();
     load_schedules_from_nvs();
     load_logs_from_nvs();
 
-    // Power-cycle mode advancement (0 -> 1 -> 2 -> 0)
-    // Always remember the last state from NVS and cycle to next mode
+    // Power-cycle mode advancement through cycle-enabled presets
     uint8_t lastMode = currentMode;
-    if (lastMode >= 2) {
-        currentMode = 0;
-    } else {
-        currentMode = lastMode + 1;
-    }
-    brightness = (defaultModes[currentMode].brightness > 0) ? defaultModes[currentMode].brightness : 255;
-    targetBrightness = brightness;
-    activeBrightness = brightness;
-    currentBrightness = (float)brightness;
+    uint8_t nextMode = get_next_cycle_preset(lastMode);
+    currentMode = nextMode;
+    activate_preset(currentMode);
     save_state();     // Persist immediately so subsequent boots advance from here
 
     Serial.printf("[Boot] Last Mode: %d -> Active Mode: %d | Brightness: %d\n",

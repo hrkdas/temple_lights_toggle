@@ -7,8 +7,11 @@ import '../../domain/providers.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/auto_off_timer_widget.dart';
 import '../../ui/widgets/connection_card.dart';
+import '../../ui/widgets/deep_control_sheet.dart';
+import '../../ui/widgets/kelvin_warmth_slider.dart';
 import '../../ui/widgets/light_dial_button.dart';
 import '../../ui/widgets/radar_sweep.dart';
+import '../../ui/widgets/split_tile_card.dart';
 import '../scanner/device_sheet.dart';
 
 /// Main screen featuring BLE auto-connect telemetry, mode controls, brightness slider, and RGB picker.
@@ -24,8 +27,18 @@ class LightsScreen extends ConsumerWidget {
     final conn = ref.watch(lightSessionProvider);
     final light = ref.watch(lightControlProvider);
     final defaultModes = ref.watch(defaultModesProvider);
+    final presets = ref.watch(presetsProvider);
+    final rooms = ref.watch(roomsProvider);
+    final activeRoomId = ref.watch(activeRoomIdProvider);
+    final paired = ref.watch(pairedDevicesProvider);
+    final scenes = ref.watch(sacredScenesProvider);
     final ctrl = ref.read(lightControlProvider.notifier);
     final session = ref.read(lightSessionProvider.notifier);
+
+    final activeRoom = rooms.where((r) => r.id == activeRoomId).firstOrNull;
+    final devicesInActiveRoom = activeRoomId == null
+        ? paired
+        : paired.where((d) => d.effectiveRoomId == activeRoomId).toList();
 
     return SafeArea(
       child: Padding(
@@ -40,16 +53,42 @@ class LightsScreen extends ConsumerWidget {
               onForget: () => session.forgetDevice(),
               onScan: () => session.scanAndAutoConnect(),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
 
-            // 2. Main Control Body
+            // 2. Top Glanceable Status Banner
+            _buildGlanceableStatusBanner(paired, light, conn, rooms, ref),
+
+            // 3. Multi-Room Selector & Power Hub
+            if (rooms.isNotEmpty || paired.isNotEmpty)
+              _buildRoomBar(rooms, activeRoomId, paired, ref),
+
+            // 4. Sacred Quick Scenes Bar
+            _buildSacredQuickScenes(scenes, activeRoomId, ref),
+
+            // 5. Room Hero Card (when a specific room is selected)
+            if (activeRoom != null && devicesInActiveRoom.isNotEmpty)
+              _buildRoomHeroCard(activeRoom, devicesInActiveRoom, ref),
+
+            // 6. Main Control Body
             Expanded(
               child: Center(
-                child: _buildCenterContent(context, conn, light, ctrl, session, defaultModes),
+                child: _buildCenterContent(
+                  context,
+                  conn,
+                  light,
+                  ctrl,
+                  session,
+                  defaultModes,
+                  presets,
+                  paired,
+                  rooms,
+                  activeRoomId,
+                  ref,
+                ),
               ),
             ),
 
-            // 3. Bottom Controls (When disconnected or failed)
+            // 7. Bottom Controls (When disconnected or failed)
             if (conn.phase == ConnPhase.failed ||
                 conn.phase == ConnPhase.disconnected ||
                 conn.phase == ConnPhase.idle) ...[
@@ -78,6 +117,234 @@ class LightsScreen extends ConsumerWidget {
     );
   }
 
+  Widget _buildGlanceableStatusBanner(
+    List<PairedDevice> paired,
+    LightState light,
+    ConnState conn,
+    List<RoomModel> rooms,
+    WidgetRef ref,
+  ) {
+    int activeCount = 0;
+    final activeRoomNames = <String>{};
+
+    if (conn.isConnected && light.isOn && light.brightness > 0) {
+      activeCount++;
+      final activeDev = ref.watch(activeDeviceProvider);
+      if (activeDev != null) {
+        final r = rooms.where((rm) => rm.id == activeDev.effectiveRoomId).firstOrNull;
+        if (r != null) activeRoomNames.add(r.name);
+      }
+    }
+
+    for (final d in paired) {
+      if (d.cachedIsOn == true && (d.cachedBrightness ?? 0) > 0) {
+        if (!conn.isConnected || d.id != conn.deviceId) {
+          activeCount++;
+          final r = rooms.where((rm) => rm.id == d.effectiveRoomId).firstOrNull;
+          if (r != null) activeRoomNames.add(r.name);
+        }
+      }
+    }
+
+    final isAnyOn = activeCount > 0;
+    final roomSummary = activeRoomNames.isEmpty
+        ? 'Puja Mandir'
+        : activeRoomNames.take(2).join(' & ');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: isAnyOn ? AppTheme.amber.withValues(alpha: 0.12) : AppTheme.surfaceRaised,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isAnyOn ? AppTheme.amber.withValues(alpha: 0.3) : AppTheme.border,
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isAnyOn ? Icons.lightbulb_rounded : Icons.lightbulb_outline_rounded,
+                size: 16,
+                color: isAnyOn ? AppTheme.amber : AppTheme.textMuted,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isAnyOn
+                    ? '$activeCount light${activeCount > 1 ? "s" : ""} on • $roomSummary'
+                    : 'All lights in standby',
+                style: AppTheme.body(
+                  size: 11.5,
+                  color: isAnyOn ? AppTheme.amber : AppTheme.textMuted,
+                  weight: isAnyOn ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+          if (isAnyOn)
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () async {
+                await AppHaptics.medium();
+                await ref.read(roomsProvider.notifier).syncRoomPower('all', false);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppTheme.amber.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'ALL OFF',
+                  style: AppTheme.mono(size: 9.5, color: AppTheme.amber, weight: FontWeight.w700),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSacredQuickScenes(
+    List<SacredScene> scenes,
+    String? activeRoomId,
+    WidgetRef ref,
+  ) {
+    return Container(
+      height: 38,
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        itemCount: scenes.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (context, index) {
+          final scene = scenes[index];
+          final sceneColor = Color.fromARGB(255, scene.r, scene.g, scene.b);
+
+          return InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () async {
+              await AppHaptics.selection();
+              await ref.read(roomsProvider.notifier).syncRoomScene(
+                activeRoomId ?? 'all',
+                scene,
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceRaised,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(scene.emoji, style: const TextStyle(fontSize: 13)),
+                  const SizedBox(width: 6),
+                  Text(
+                    scene.name,
+                    style: AppTheme.heading(size: 11, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(width: 4),
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: sceneColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildRoomHeroCard(
+    RoomModel room,
+    List<PairedDevice> roomDevices,
+    WidgetRef ref,
+  ) {
+    final anyOn = roomDevices.any((d) => d.cachedIsOn == true);
+    final avgBrightness = roomDevices.isEmpty
+        ? 255
+        : (roomDevices.map((d) => d.cachedBrightness ?? 255).reduce((a, b) => a + b) / roomDevices.length).round();
+    final pct = ((avgBrightness / 255.0) * 100).round();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: anyOn ? AppTheme.amber.withValues(alpha: 0.12) : AppTheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: anyOn ? AppTheme.amber.withValues(alpha: 0.4) : AppTheme.border),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Text(room.iconEmoji, style: const TextStyle(fontSize: 18)),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(room.name, style: AppTheme.heading(size: 13)),
+                      Text(
+                        '${roomDevices.length} Light${roomDevices.length != 1 ? "s" : ""} • ${anyOn ? "$pct% Brightness" : "Powered Off"}',
+                        style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              IconButton(
+                icon: Icon(
+                  Icons.power_settings_new_rounded,
+                  color: anyOn ? AppTheme.amber : AppTheme.textMuted,
+                  size: 22,
+                ),
+                onPressed: () async {
+                  await AppHaptics.medium();
+                  await ref.read(roomsProvider.notifier).syncRoomPower(room.id, !anyOn);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SliderTheme(
+            data: SliderThemeData(
+              activeTrackColor: AppTheme.amber,
+              inactiveTrackColor: AppTheme.surfaceRaised,
+              thumbColor: AppTheme.amber,
+              overlayColor: AppTheme.amber.withValues(alpha: 0.2),
+              trackHeight: 4,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+            ),
+            child: Slider(
+              value: avgBrightness.toDouble().clamp(0.0, 255.0),
+              min: 0,
+              max: 255,
+              onChanged: (val) {
+                ref.read(roomsProvider.notifier).syncRoomBrightness(room.id, val.round());
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCenterContent(
     BuildContext context,
     ConnState conn,
@@ -85,6 +352,11 @@ class LightsScreen extends ConsumerWidget {
     LightControlNotifier ctrl,
     LightSessionNotifier session,
     List<DefaultModeConfig> defaultModes,
+    List<LightPreset> presets,
+    List<PairedDevice> paired,
+    List<RoomModel> rooms,
+    String? activeRoomId,
+    WidgetRef ref,
   ) {
     // 1. Scanning State -> Radar Sweep
     if (conn.isScanning) {
@@ -158,13 +430,34 @@ class LightsScreen extends ConsumerWidget {
       ).animate().fadeIn(duration: 250.ms);
     }
 
-    // 3. Connected State -> Dial, Mode Selector, Brightness, RGB Color & Auto-Off Timer
+    // 3. Connected State -> Split-Tile Card, Dial, Mode Selector, Kelvin Slider, Brightness, RGB Color & Auto-Off Timer
     if (conn.isConnected) {
+      final activeDev = paired.where((d) => d.id == conn.deviceId).firstOrNull;
+      final activeRoom = activeDev != null
+          ? rooms.where((r) => r.id == activeDev.effectiveRoomId).firstOrNull
+          : null;
+      final roomLabel = activeRoom?.name ?? 'Puja Mandir';
+
       return SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.only(top: 4, bottom: 20),
         child: Column(
           children: [
+            // Next-Gen Split-Tile Device Card (Tap body opens DeepControlSheet, drag scrubs, tap icon toggles power)
+            SplitTileCard(
+              name: activeDev?.displayName ?? conn.deviceName ?? 'Temple Lights',
+              roomLabel: '$roomLabel • Linked',
+              isOn: light.isOn,
+              brightness: light.brightness,
+              color: Color.fromARGB(255, light.r, light.g, light.b),
+              modeLabel: light.modeName,
+              onTogglePower: () => ctrl.togglePower(),
+              onOpenDetail: () => DeepControlSheet.show(context),
+              onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
+            ),
+
+            const SizedBox(height: 14),
+
             // Center Power Dial
             LightDialButton(
               isOn: light.isOn,
@@ -180,7 +473,16 @@ class LightsScreen extends ConsumerWidget {
             const SizedBox(height: 18),
 
             // Mode Selector Cards
-            _buildModeSelector(light, ctrl, defaultModes),
+            _buildModeSelector(light, ctrl, defaultModes, presets),
+
+            const SizedBox(height: 14),
+
+            // Dedicated Kelvin Warmth Slider (2000K to 6500K)
+            KelvinWarmthSlider(
+              initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
+              onChanged: (k, r, g, b) => ctrl.setRgb(r, g, b),
+              onChangeEnd: (k, r, g, b) => ctrl.setRgb(r, g, b),
+            ),
 
             const SizedBox(height: 14),
 
@@ -207,8 +509,8 @@ class LightsScreen extends ConsumerWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Container(
-          width: 110,
-          height: 110,
+          width: 100,
+          height: 100,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: AppTheme.surfaceRaised,
@@ -223,7 +525,7 @@ class LightsScreen extends ConsumerWidget {
           ),
           child: ClipOval(
             child: Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(12),
               child: Image.asset(
                 'assets/icons/temple_icon.png',
                 fit: BoxFit.contain,
@@ -231,7 +533,7 @@ class LightsScreen extends ConsumerWidget {
             ),
           ),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 16),
         Text(
           conn.isTargetPaired ? 'TEMPLE LIGHTS DISCONNECTED' : 'NO LIGHTS CONNECTED',
           style: AppTheme.heading(size: 15, color: AppTheme.textSecondary, letterSpacing: 1.5),
@@ -242,20 +544,173 @@ class LightsScreen extends ConsumerWidget {
           textAlign: TextAlign.center,
           style: AppTheme.body(size: 12.5, color: AppTheme.textMuted),
         ),
+        if (paired.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              '${paired.length} Paired device${paired.length != 1 ? "s" : ""} standing by for automatic GATT sync',
+              textAlign: TextAlign.center,
+              style: AppTheme.body(size: 11, color: AppTheme.amber),
+            ),
+          ),
+        ],
       ],
     ).animate().fadeIn(duration: 200.ms);
+  }
+
+  Widget _buildRoomBar(
+    List<RoomModel> rooms,
+    String? activeRoomId,
+    List<PairedDevice> pairedDevices,
+    WidgetRef ref,
+  ) {
+    if (rooms.isEmpty && pairedDevices.length <= 1) return const SizedBox.shrink();
+
+    final activeRoom = rooms.where((r) => r.id == activeRoomId).firstOrNull;
+    final devicesInActiveRoom = activeRoomId == null
+        ? pairedDevices
+        : pairedDevices.where((d) => d.effectiveRoomId == activeRoomId).toList();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  _buildRoomChip(
+                    label: 'All Rooms',
+                    icon: '🏠',
+                    count: pairedDevices.length,
+                    isSelected: activeRoomId == null,
+                    onTap: () {
+                      AppHaptics.selection();
+                      ref.read(activeRoomIdProvider.notifier).state = null;
+                    },
+                  ),
+                  const SizedBox(width: 6),
+                  ...rooms.map((room) {
+                    final count = pairedDevices.where((d) => d.effectiveRoomId == room.id).length;
+                    final isSelected = activeRoomId == room.id;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: _buildRoomChip(
+                        label: room.name,
+                        icon: room.iconEmoji,
+                        count: count,
+                        isSelected: isSelected,
+                        onTap: () {
+                          AppHaptics.selection();
+                          ref.read(activeRoomIdProvider.notifier).state = room.id;
+                        },
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+          if (activeRoom != null && devicesInActiveRoom.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.power_settings_new_rounded, size: 14, color: Colors.white),
+              label: Text('Room Power', style: AppTheme.heading(size: 10, color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.amber,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                minimumSize: const Size(60, 30),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                await AppHaptics.medium();
+                final anyOn = devicesInActiveRoom.any((d) => d.cachedIsOn == true);
+                await ref.read(roomsProvider.notifier).toggleRoomPower(activeRoom.id, !anyOn);
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoomChip({
+    required String label,
+    required String icon,
+    required int count,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected ? AppTheme.amber.withValues(alpha: 0.16) : AppTheme.surfaceRaised,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? AppTheme.amber : AppTheme.border,
+            width: isSelected ? 1.6 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(icon, style: const TextStyle(fontSize: 12)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: AppTheme.heading(
+                size: 11,
+                color: isSelected ? AppTheme.amber : AppTheme.textSecondary,
+              ),
+            ),
+            if (count > 0) ...[
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: isSelected ? AppTheme.amber.withValues(alpha: 0.25) : AppTheme.surface,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '$count',
+                  style: AppTheme.mono(
+                    size: 9,
+                    color: isSelected ? AppTheme.amber : AppTheme.textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildModeSelector(
     LightState light,
     LightControlNotifier ctrl,
     List<DefaultModeConfig> defaultModes,
+    List<LightPreset> presets,
   ) {
     final m0 = defaultModes.isNotEmpty ? defaultModes[0] : DefaultModeConfig.factoryDefaults[0];
     final m1 = defaultModes.length > 1 ? defaultModes[1] : DefaultModeConfig.factoryDefaults[1];
     final m2 = defaultModes.length > 2 ? defaultModes[2] : DefaultModeConfig.factoryDefaults[2];
 
-    final modes = [
+    final modes = <Map<String, dynamic>>[
       {
         'mode': 0,
         'title': m0.name,
@@ -286,8 +741,26 @@ class LightsScreen extends ConsumerWidget {
       },
     ];
 
+    // Add any additional presets beyond the 3 factory modes
+    final customPresets = presets.where((p) => p.index >= 3).toList();
+    for (final p in customPresets) {
+      final firstSeg = p.segments.isNotEmpty ? p.segments.first : null;
+      final pColor = firstSeg != null ? Color.fromARGB(255, firstSeg.r, firstSeg.g, firstSeg.b) : AppTheme.gold;
+      modes.add({
+        'mode': p.index,
+        'title': p.name,
+        'sub': '${p.segments.length} Segs',
+        'icon': Icons.tune_rounded,
+        'color': pColor,
+        'preset': p,
+      });
+    }
+
     String currentModeTitle;
-    if (light.mode == 0) {
+    final activeMatchingPreset = presets.where((p) => p.index == light.activePreset).firstOrNull;
+    if (activeMatchingPreset != null && light.activePreset > 0) {
+      currentModeTitle = activeMatchingPreset.name;
+    } else if (light.mode == 0) {
       currentModeTitle = m0.name;
     } else if (light.mode == 1) {
       currentModeTitle = m1.name;
@@ -328,74 +801,113 @@ class LightsScreen extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 10),
-          Row(
-            children: modes.map((m) {
-              final modeIdx = m['mode'] as int;
-              final isSelected = light.mode == modeIdx && light.isOn && light.brightness > 0;
-              final modeColor = m['color'] as Color;
-
-              return Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 3),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => ctrl.setMode(modeIdx),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-                      decoration: BoxDecoration(
-                        color: isSelected ? modeColor.withValues(alpha: 0.16) : AppTheme.surfaceRaised,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected ? modeColor : AppTheme.border,
-                          width: isSelected ? 1.6 : 1.0,
-                        ),
-                        boxShadow: isSelected
-                            ? [
-                                BoxShadow(
-                                  color: modeColor.withValues(alpha: 0.25),
-                                  blurRadius: 10,
-                                  spreadRadius: 1,
-                                ),
-                              ]
-                            : null,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            m['icon'] as IconData,
-                            size: 20,
-                            color: isSelected ? modeColor : AppTheme.textSecondary,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            m['title'] as String,
-                            textAlign: TextAlign.center,
-                            style: AppTheme.heading(
-                              size: 10.5,
-                              color: isSelected ? modeColor : AppTheme.textPrimary,
-                              letterSpacing: 0.6,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            m['sub'] as String,
-                            textAlign: TextAlign.center,
-                            style: AppTheme.body(
-                              size: 8.5,
-                              color: isSelected ? modeColor.withValues(alpha: 0.8) : AppTheme.textMuted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+          if (modes.length <= 4)
+            Row(
+              children: modes.map((m) => Expanded(child: _buildModeTile(m, light, ctrl))).toList(),
+            )
+          else
+            SizedBox(
+              height: 76,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                itemCount: modes.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, idx) => SizedBox(
+                  width: 82,
+                  child: _buildModeTile(modes[idx], light, ctrl),
                 ),
-              );
-            }).toList(),
-          ),
+              ),
+            ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildModeTile(
+    Map<String, dynamic> m,
+    LightState light,
+    LightControlNotifier ctrl,
+  ) {
+    final modeIdx = m['mode'] as int;
+    final isSelected = ((light.mode == modeIdx && !m.containsKey('preset')) ||
+            (light.activePreset == modeIdx && m.containsKey('preset'))) &&
+        light.isOn &&
+        light.brightness > 0;
+    final modeColor = m['color'] as Color;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () async {
+          if (m.containsKey('preset')) {
+            final p = m['preset'] as LightPreset;
+            await ctrl.setSegments(p.segments);
+            await ctrl.setAnimConfig(
+              transitionStyle: p.transitionStyle,
+              ambientStyle: p.ambientStyle,
+              ambientDepth: p.ambientDepth,
+            );
+            await ctrl.setPreset(p.index);
+          } else {
+            await ctrl.setMode(modeIdx);
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          decoration: BoxDecoration(
+            color: isSelected ? modeColor.withValues(alpha: 0.16) : AppTheme.surfaceRaised,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? modeColor : AppTheme.border,
+              width: isSelected ? 1.6 : 1.0,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: modeColor.withValues(alpha: 0.25),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                m['icon'] as IconData,
+                size: 20,
+                color: isSelected ? modeColor : AppTheme.textSecondary,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                m['title'] as String,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTheme.heading(
+                  size: 10.5,
+                  color: isSelected ? modeColor : AppTheme.textPrimary,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                m['sub'] as String,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTheme.body(
+                  size: 8.5,
+                  color: isSelected ? modeColor.withValues(alpha: 0.8) : AppTheme.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

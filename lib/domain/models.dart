@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+
 enum ConnPhase {
   idle,
   scanning,
@@ -74,6 +76,106 @@ class ConnState {
   static const idle = ConnState(phase: ConnPhase.idle);
 }
 
+class LedSegment {
+  const LedSegment({
+    required this.start,
+    required this.count,
+    this.r = 255,
+    this.g = 147,
+    this.b = 41,
+    this.brightness = 255,
+    this.effect = 0, // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Ember, 5=Aurora, 6=Rainbow
+    this.speed = 5,
+    this.name,
+  });
+
+  final int start;
+  final int count;
+  final int r;
+  final int g;
+  final int b;
+  final int brightness;
+  final int effect;
+  final int speed;
+  final String? name;
+
+  int get end => (start + count - 1).clamp(start, 65535);
+
+  Color get color => Color.fromARGB(255, r, g, b);
+
+  String get displayName => (name != null && name!.trim().isNotEmpty)
+      ? name!.trim()
+      : 'LEDs #${start + 1}–#${end + 1}';
+
+  String get effectName {
+    switch (effect) {
+      case 0:
+        return 'Pure Solid';
+      case 1:
+        return 'Gentle Breathe';
+      case 2:
+        return 'Diya Candle Flutter';
+      case 3:
+        return 'Starlight Twinkle';
+      case 4:
+        return 'Sacred Amber Embers';
+      case 5:
+        return 'Aurora Flow';
+      case 6:
+        return 'Rainbow Cycle';
+      default:
+        return 'Pure Solid';
+    }
+  }
+
+  LedSegment copyWith({
+    int? start,
+    int? count,
+    int? r,
+    int? g,
+    int? b,
+    int? brightness,
+    int? effect,
+    int? speed,
+    String? name,
+  }) =>
+      LedSegment(
+        start: start ?? this.start,
+        count: count ?? this.count,
+        r: r ?? this.r,
+        g: g ?? this.g,
+        b: b ?? this.b,
+        brightness: brightness ?? this.brightness,
+        effect: effect ?? this.effect,
+        speed: speed ?? this.speed,
+        name: name ?? this.name,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'start': start,
+        'count': count,
+        'r': r,
+        'g': g,
+        'b': b,
+        'bright': brightness,
+        'fx': effect,
+        'spd': speed,
+        if (name != null && name!.isNotEmpty) 'name': name,
+      };
+
+  factory LedSegment.fromJson(Map<String, dynamic> json) => LedSegment(
+        start: (json['start'] as num?)?.toInt() ?? 0,
+        count: (json['count'] as num?)?.toInt() ?? 1,
+        r: (json['r'] as num?)?.toInt() ?? 255,
+        g: (json['g'] as num?)?.toInt() ?? 147,
+        b: (json['b'] as num?)?.toInt() ?? 41,
+        brightness: (json['bright'] as num?)?.toInt() ?? 255,
+        effect: (json['fx'] as num?)?.toInt() ?? 0,
+        speed: (json['spd'] as num?)?.toInt() ?? 5,
+        name: json['name'] as String?,
+      );
+}
+
 class LightState {
   const LightState({
     this.isOn = true,
@@ -90,6 +192,9 @@ class LightState {
     this.transitionStyle = 0,
     this.ambientStyle = 1,
     this.ambientDepth = 6,
+    this.activePreset = 0,
+    this.cycleFlags = 0x07,
+    this.segments = const [],
   });
 
   final bool isOn;
@@ -101,9 +206,12 @@ class LightState {
   final String? firmwareVersion;
   final int ledCount;
   final int maxCurrentMa;
-  final int transitionStyle; // 0=Center-Out, 1=Linear Sweep, 2=Instant Fade
-  final int ambientStyle;    // 0=Solid Still, 1=Gentle Breathing, 2=Diya Candle
+  final int transitionStyle; // 0=Center-Out, 1=Sunrise, 2=Sunset, 3=Convergence, 4=Sparkle, 5=Domino, 6=Fade
+  final int ambientStyle;    // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Embers, 5=Aurora, 6=Rainbow
   final int ambientDepth;
+  final int activePreset;
+  final int cycleFlags;
+  final List<LedSegment> segments;
 
   bool get isOff => !isOn || brightness == 0;
 
@@ -127,30 +235,38 @@ class LightState {
     }
   }
 
+  static const List<String> transitionStyleNames = [
+    'Center-Out Dawn',
+    'Sunrise Flow',
+    'Uniform Smooth Fade',
+    'Sunset Cascade',
+    'Dual Convergence',
+    'Sparkle Ignition',
+    'Segment Domino',
+  ];
+
+  static const List<String> ambientStyleNames = [
+    'Pure Solid',
+    'Gentle Breathing',
+    'Diya Candle Flutter',
+    'Starlight Twinkle',
+    'Sacred Amber Embers',
+    'Aurora Flow',
+    'Rainbow Cycle',
+  ];
+
   String get transitionStyleName {
-    switch (transitionStyle) {
-      case 0:
-        return 'Center-Out Dawn';
-      case 1:
-        return 'Sunrise Flow';
-      case 2:
-        return 'Uniform Smooth Fade';
-      default:
-        return 'Center-Out Dawn';
+    if (transitionStyle >= 0 && transitionStyle < transitionStyleNames.length) {
+      return transitionStyleNames[transitionStyle];
     }
+    return transitionStyleNames[0];
   }
 
   String get ambientStyleName {
-    switch (ambientStyle) {
-      case 0:
-        return 'Pure Solid';
-      case 1:
-        return 'Gentle Breathing';
-      case 2:
-        return 'Diya Candle Flutter';
-      default:
-        return 'Gentle Breathing';
+    if (ambientStyle >= 0 && ambientStyle < ambientStyleNames.length) {
+      return ambientStyleNames[ambientStyle];
     }
+    return ambientStyleNames[1];
   }
 
   LightState copyWith({
@@ -168,6 +284,9 @@ class LightState {
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
+    int? activePreset,
+    int? cycleFlags,
+    List<LedSegment>? segments,
   }) =>
       LightState(
         isOn: isOn ?? this.isOn,
@@ -184,6 +303,9 @@ class LightState {
         transitionStyle: transitionStyle ?? this.transitionStyle,
         ambientStyle: ambientStyle ?? this.ambientStyle,
         ambientDepth: ambientDepth ?? this.ambientDepth,
+        activePreset: activePreset ?? this.activePreset,
+        cycleFlags: cycleFlags ?? this.cycleFlags,
+        segments: segments ?? this.segments,
       );
 
   static const idle = LightState();
@@ -359,6 +481,9 @@ class PairedDevice {
     this.transitionStyle,
     this.ambientStyle,
     this.ambientDepth,
+    this.roomId,
+    this.activePresetIndex,
+    this.segments,
   });
 
   final String id;
@@ -377,6 +502,9 @@ class PairedDevice {
   int? transitionStyle;
   int? ambientStyle;
   int? ambientDepth;
+  String? roomId;
+  int? activePresetIndex;
+  List<LedSegment>? segments;
 
   String get displayName =>
       (customAlias != null && customAlias!.trim().isNotEmpty)
@@ -390,6 +518,7 @@ class PairedDevice {
   int get effectiveTransitionStyle => transitionStyle ?? 0;
   int get effectiveAmbientStyle => ambientStyle ?? 1;
   int get effectiveAmbientDepth => ambientDepth ?? 6;
+  String get effectiveRoomId => roomId ?? 'room_temple';
 
   double get stripLengthMeters => effectiveLedCount / 60.0;
   String get formattedLength => '${stripLengthMeters.toStringAsFixed(1)}m';
@@ -411,6 +540,9 @@ class PairedDevice {
         'transitionStyle': transitionStyle,
         'ambientStyle': ambientStyle,
         'ambientDepth': ambientDepth,
+        'roomId': roomId,
+        'activePresetIndex': activePresetIndex,
+        if (segments != null) 'segments': segments!.map((s) => s.toJson()).toList(),
       };
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
@@ -430,6 +562,11 @@ class PairedDevice {
         transitionStyle: (json['transitionStyle'] as num?)?.toInt(),
         ambientStyle: (json['ambientStyle'] as num?)?.toInt(),
         ambientDepth: (json['ambientDepth'] as num?)?.toInt(),
+        roomId: json['roomId'] as String?,
+        activePresetIndex: (json['activePresetIndex'] as num?)?.toInt(),
+        segments: (json['segments'] as List<dynamic>?)
+            ?.map((e) => LedSegment.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 
   PairedDevice copyWith({
@@ -449,6 +586,9 @@ class PairedDevice {
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
+    String? roomId,
+    int? activePresetIndex,
+    List<LedSegment>? segments,
   }) =>
       PairedDevice(
         id: id ?? this.id,
@@ -467,6 +607,9 @@ class PairedDevice {
         transitionStyle: transitionStyle ?? this.transitionStyle,
         ambientStyle: ambientStyle ?? this.ambientStyle,
         ambientDepth: ambientDepth ?? this.ambientDepth,
+        roomId: roomId ?? this.roomId,
+        activePresetIndex: activePresetIndex ?? this.activePresetIndex,
+        segments: segments ?? this.segments,
       );
 }
 
@@ -962,6 +1105,409 @@ class DefaultModeConfig {
       b: 255,
       style: 0, // Full strip
       brightness: 255,
+    ),
+  ];
+}
+
+class LightPreset {
+  const LightPreset({
+    required this.index,
+    required this.name,
+    this.brightness = 255,
+    this.transitionStyle = 0,
+    this.ambientStyle = 1,
+    this.ambientDepth = 6,
+    this.cycleEnabled = true,
+    this.segments = const [],
+    this.r = 255,
+    this.g = 147,
+    this.b = 41,
+  });
+
+  final int index;
+  final String name;
+  final int brightness;
+  final int transitionStyle;
+  final int ambientStyle;
+  final int ambientDepth;
+  final bool cycleEnabled;
+  final List<LedSegment> segments;
+  final int r, g, b;
+
+  int get brightnessPercent => ((brightness / 255.0) * 100).round().clamp(1, 100);
+
+  Color get color => Color.fromARGB(255, r, g, b);
+
+  String get ambientStyleName {
+    if (ambientStyle >= 0 && ambientStyle < LightState.ambientStyleNames.length) {
+      return LightState.ambientStyleNames[ambientStyle];
+    }
+    return LightState.ambientStyleNames[1];
+  }
+
+  String get transitionStyleName {
+    if (transitionStyle >= 0 && transitionStyle < LightState.transitionStyleNames.length) {
+      return LightState.transitionStyleNames[transitionStyle];
+    }
+    return LightState.transitionStyleNames[0];
+  }
+
+  LightPreset copyWith({
+    int? index,
+    String? name,
+    int? brightness,
+    int? transitionStyle,
+    int? ambientStyle,
+    int? ambientDepth,
+    bool? cycleEnabled,
+    List<LedSegment>? segments,
+    int? r,
+    int? g,
+    int? b,
+  }) =>
+      LightPreset(
+        index: index ?? this.index,
+        name: name ?? this.name,
+        brightness: brightness ?? this.brightness,
+        transitionStyle: transitionStyle ?? this.transitionStyle,
+        ambientStyle: ambientStyle ?? this.ambientStyle,
+        ambientDepth: ambientDepth ?? this.ambientDepth,
+        cycleEnabled: cycleEnabled ?? this.cycleEnabled,
+        segments: segments ?? this.segments,
+        r: r ?? this.r,
+        g: g ?? this.g,
+        b: b ?? this.b,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'idx': index,
+        'name': name,
+        'bright': brightness,
+        'trans': transitionStyle,
+        'amb': ambientStyle,
+        'depth': ambientDepth,
+        'cycle': cycleEnabled,
+        'r': r,
+        'g': g,
+        'b': b,
+        'segs': segments.map((s) => s.toJson()).toList(),
+      };
+
+  factory LightPreset.fromJson(Map<String, dynamic> json) => LightPreset(
+        index: (json['idx'] as num?)?.toInt() ?? 0,
+        name: json['name'] as String? ?? 'Preset',
+        brightness: (json['bright'] as num?)?.toInt() ?? 255,
+        transitionStyle: (json['trans'] as num?)?.toInt() ?? 0,
+        ambientStyle: (json['amb'] as num?)?.toInt() ?? 1,
+        ambientDepth: (json['depth'] as num?)?.toInt() ?? 6,
+        cycleEnabled: json['cycle'] as bool? ?? true,
+        r: (json['r'] as num?)?.toInt() ?? 255,
+        g: (json['g'] as num?)?.toInt() ?? 147,
+        b: (json['b'] as num?)?.toInt() ?? 41,
+        segments: (json['segs'] as List<dynamic>?)
+                ?.map((e) => LedSegment.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+
+  /// Converts legacy DefaultModeConfig to modern LightPreset
+  factory LightPreset.fromLegacyDefaultMode(DefaultModeConfig mode, {int totalLeds = 150}) {
+    List<LedSegment> segs;
+    if (mode.style == 1) {
+      final midStart = (totalLeds * 0.20).round();
+      final midCount = totalLeds - (midStart * 2);
+      segs = [
+        LedSegment(
+          start: midStart,
+          count: midCount,
+          r: mode.r,
+          g: mode.g,
+          b: mode.b,
+          brightness: mode.brightness,
+          name: 'Center Focus (1.5m)',
+        ),
+      ];
+    } else {
+      segs = [
+        LedSegment(
+          start: 0,
+          count: totalLeds,
+          r: mode.r,
+          g: mode.g,
+          b: mode.b,
+          brightness: mode.brightness,
+          name: 'Full Strip',
+        ),
+      ];
+    }
+    return LightPreset(
+      index: mode.index,
+      name: mode.name,
+      brightness: mode.brightness,
+      transitionStyle: 0,
+      ambientStyle: 1,
+      ambientDepth: 6,
+      cycleEnabled: true,
+      segments: segs,
+      r: mode.r,
+      g: mode.g,
+      b: mode.b,
+    );
+  }
+
+  static List<LightPreset> defaultPresets({int totalLeds = 150}) => [
+        LightPreset(
+          index: 0,
+          name: 'Warm White Full',
+          brightness: 255,
+          transitionStyle: 0,
+          ambientStyle: 1,
+          cycleEnabled: true,
+          r: 255,
+          g: 147,
+          b: 41,
+          segments: [
+            LedSegment(start: 0, count: totalLeds, r: 255, g: 147, b: 41, name: 'Full Warm'),
+          ],
+        ),
+        LightPreset(
+          index: 1,
+          name: 'Center Warm Focus',
+          brightness: 255,
+          transitionStyle: 0,
+          ambientStyle: 1,
+          cycleEnabled: true,
+          r: 255,
+          g: 147,
+          b: 41,
+          segments: [
+            LedSegment(
+              start: (totalLeds * 0.20).round(),
+              count: (totalLeds * 0.60).round(),
+              r: 255,
+              g: 147,
+              b: 41,
+              name: 'Center 1.5m',
+            ),
+          ],
+        ),
+        LightPreset(
+          index: 2,
+          name: 'Pure White Full',
+          brightness: 255,
+          transitionStyle: 0,
+          ambientStyle: 1,
+          cycleEnabled: true,
+          r: 255,
+          g: 255,
+          b: 255,
+          segments: [
+            LedSegment(start: 0, count: totalLeds, r: 255, g: 255, b: 255, name: 'Full White'),
+          ],
+        ),
+        LightPreset(
+          index: 3,
+          name: 'Pillar Highlight & Halo',
+          brightness: 255,
+          transitionStyle: 3, // Dual convergence
+          ambientStyle: 2,    // Diya flutter
+          cycleEnabled: false,
+          r: 255,
+          g: 180,
+          b: 0,
+          segments: [
+            LedSegment(start: 0, count: 6, r: 255, g: 147, b: 41, name: 'Base 1–6'),
+            LedSegment(
+              start: totalLeds >= 106 ? 100 : totalLeds - 6,
+              count: 6,
+              r: 255,
+              g: 255,
+              b: 255,
+              name: 'Apex 100–105',
+            ),
+          ],
+        ),
+        LightPreset(
+          index: 4,
+          name: 'Aarti Sacred Embers',
+          brightness: 240,
+          transitionStyle: 4, // Sparkle ignition
+          ambientStyle: 4,    // Sacred amber embers
+          cycleEnabled: false,
+          r: 255,
+          g: 120,
+          b: 20,
+          segments: [
+            LedSegment(start: 0, count: totalLeds, r: 255, g: 120, b: 20, effect: 4, name: 'Sacred Fire'),
+          ],
+        ),
+      ];
+}
+
+class RoomModel {
+  const RoomModel({
+    required this.id,
+    required this.name,
+    this.iconName = 'temple',
+    this.deviceIds = const [],
+  });
+
+  final String id;
+  final String name;
+  final String iconName;
+  final List<String> deviceIds;
+
+  String get iconEmoji {
+    switch (iconName.toLowerCase()) {
+      case 'temple':
+      case 'mandir':
+        return '🛕';
+      case 'living':
+      case 'living_room':
+        return '🛋️';
+      case 'bed':
+      case 'bedroom':
+        return '🛏️';
+      case 'dining':
+        return '🍽️';
+      case 'balcony':
+        return '🪴';
+      default:
+        return '🏠';
+    }
+  }
+
+  RoomModel copyWith({
+    String? id,
+    String? name,
+    String? iconName,
+    List<String>? deviceIds,
+  }) =>
+      RoomModel(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        iconName: iconName ?? this.iconName,
+        deviceIds: deviceIds ?? this.deviceIds,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'icon': iconName,
+        'devs': deviceIds,
+      };
+
+  factory RoomModel.fromJson(Map<String, dynamic> json) => RoomModel(
+        id: json['id'] as String? ?? 'room_${DateTime.now().millisecondsSinceEpoch}',
+        name: json['name'] as String? ?? 'Room',
+        iconName: json['icon'] as String? ?? 'temple',
+        deviceIds: (json['devs'] as List<dynamic>?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            const [],
+      );
+
+  static const List<RoomModel> defaultRooms = [
+    RoomModel(id: 'room_temple', name: 'Puja Mandir', iconName: 'temple'),
+    RoomModel(id: 'room_living', name: 'Living Room', iconName: 'living'),
+    RoomModel(id: 'room_bedroom', name: 'Master Bedroom', iconName: 'bedroom'),
+  ];
+}
+
+class SacredScene {
+  const SacredScene({
+    required this.id,
+    required this.name,
+    required this.emoji,
+    required this.subtitle,
+    required this.kelvin,
+    required this.r,
+    required this.g,
+    required this.b,
+    required this.brightness,
+    required this.transitionStyle,
+    required this.ambientStyle,
+    this.ambientDepth = 50,
+  });
+
+  final String id;
+  final String name;
+  final String emoji;
+  final String subtitle;
+  final int kelvin;
+  final int r;
+  final int g;
+  final int b;
+  final int brightness;
+  final int transitionStyle;
+  final int ambientStyle;
+  final int ambientDepth;
+
+  static const List<SacredScene> defaultScenes = [
+    SacredScene(
+      id: 'scene_aarti',
+      name: 'Morning Aarti',
+      emoji: '🌅',
+      subtitle: 'Warm Dawn Radiance',
+      kelvin: 3200,
+      r: 255,
+      g: 170,
+      b: 80,
+      brightness: 255,
+      transitionStyle: 1, // Sunrise Sweep
+      ambientStyle: 1,    // Gentle Breathe
+    ),
+    SacredScene(
+      id: 'scene_diya',
+      name: 'Evening Diya',
+      emoji: '🪔',
+      subtitle: 'Candlelight Flutter',
+      kelvin: 2200,
+      r: 255,
+      g: 147,
+      b: 41,
+      brightness: 210,
+      transitionStyle: 0, // Center Out
+      ambientStyle: 2,    // Diya Flutter
+    ),
+    SacredScene(
+      id: 'scene_starlight',
+      name: 'Temple Starlight',
+      emoji: '✨',
+      subtitle: 'Golden Shimmer',
+      kelvin: 2700,
+      r: 255,
+      g: 185,
+      b: 70,
+      brightness: 140,
+      transitionStyle: 4, // Sparkle Ignition
+      ambientStyle: 3,    // Temple Twinkle
+    ),
+    SacredScene(
+      id: 'scene_night',
+      name: 'Night Sanctuary',
+      emoji: '🌙',
+      subtitle: 'Gentle Amber Glow',
+      kelvin: 2000,
+      r: 255,
+      g: 120,
+      b: 20,
+      brightness: 35,
+      transitionStyle: 6, // Uniform Cinema Fade
+      ambientStyle: 0,    // Pure Solid
+    ),
+    SacredScene(
+      id: 'scene_aurora',
+      name: 'Divine Aura',
+      emoji: '🌈',
+      subtitle: 'Sacred Hue Flow',
+      kelvin: 4000,
+      r: 255,
+      g: 180,
+      b: 100,
+      brightness: 190,
+      transitionStyle: 5, // Domino Cascade
+      ambientStyle: 5,    // Aurora Wave
     ),
   ];
 }
