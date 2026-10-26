@@ -15,6 +15,8 @@ class LightDialButton extends StatefulWidget {
     required this.b,
     required this.isEnabled,
     required this.onToggle,
+    this.onBrightnessScrub,
+    this.onBrightnessCommit,
   });
 
   final bool isOn;
@@ -23,6 +25,8 @@ class LightDialButton extends StatefulWidget {
   final int r, g, b;
   final bool isEnabled;
   final VoidCallback onToggle;
+  final ValueChanged<int>? onBrightnessScrub;
+  final ValueChanged<int>? onBrightnessCommit;
 
   @override
   State<LightDialButton> createState() => _LightDialButtonState();
@@ -35,11 +39,91 @@ class _LightDialButtonState extends State<LightDialButton> with TickerProviderSt
   )..repeat(reverse: true);
 
   bool _isPressed = false;
+  bool _isScrubbing = false;
+  int? _dragBrightness;
+
+  int get _displayBrightness => _dragBrightness ?? widget.brightness;
+  int get _displayPct => ((_displayBrightness / 255.0) * 100).round();
 
   @override
   void dispose() {
     _pulseGlowController.dispose();
     super.dispose();
+  }
+
+  void _handlePanStart(DragStartDetails details, Size size) {
+    if (!widget.isEnabled) return;
+    final center = size.center(Offset.zero);
+    final offset = details.localPosition - center;
+    final dist = offset.distance;
+
+    // Outer rotary ring interaction zone (r ~ 65..135)
+    if (widget.onBrightnessScrub != null && dist >= 68.0 && dist <= size.width / 2 + 25.0) {
+      _isScrubbing = true;
+      _updateBrightnessFromOffset(offset);
+      AppHaptics.selection();
+    } else {
+      _isScrubbing = false;
+      setState(() => _isPressed = true);
+      AppHaptics.tap();
+    }
+  }
+
+  void _handlePanUpdate(DragUpdateDetails details, Size size) {
+    if (!widget.isEnabled) return;
+    if (_isScrubbing) {
+      final center = size.center(Offset.zero);
+      _updateBrightnessFromOffset(details.localPosition - center);
+    }
+  }
+
+  void _handlePanEnd(DragEndDetails details) {
+    if (!widget.isEnabled) return;
+    if (_isScrubbing) {
+      final finalVal = _dragBrightness;
+      setState(() {
+        _isScrubbing = false;
+        _dragBrightness = null;
+      });
+      if (finalVal != null) {
+        widget.onBrightnessCommit?.call(finalVal);
+      }
+      AppHaptics.selection();
+    } else if (_isPressed) {
+      setState(() => _isPressed = false);
+      widget.onToggle();
+    }
+  }
+
+  void _handlePanCancel() {
+    if (_isScrubbing) {
+      setState(() {
+        _isScrubbing = false;
+        _dragBrightness = null;
+      });
+    }
+    if (_isPressed) {
+      setState(() => _isPressed = false);
+    }
+  }
+
+  void _updateBrightnessFromOffset(Offset offset) {
+    // 12 o'clock is -pi/2
+    final angle = math.atan2(offset.dy, offset.dx);
+    var normalized = angle + math.pi / 2;
+    if (normalized < 0) normalized += 2 * math.pi;
+    final fraction = (normalized / (2 * math.pi)).clamp(0.01, 1.0);
+    final brightness = (fraction * 255).round().clamp(1, 255);
+
+    if (brightness != _dragBrightness) {
+      final oldStep = (((_dragBrightness ?? widget.brightness) / 255.0) * 24).floor();
+      final newStep = ((brightness / 255.0) * 24).floor();
+      if (oldStep != newStep) {
+        AppHaptics.selection();
+      }
+      setState(() => _dragBrightness = brightness);
+      widget.onBrightnessScrub?.call(brightness);
+    }
   }
 
   Color get _activeColor {
@@ -142,20 +226,11 @@ class _LightDialButtonState extends State<LightDialButton> with TickerProviderSt
 
     return Center(
       child: GestureDetector(
-        onTapDown: (_) {
-          if (!widget.isEnabled) return;
-          setState(() => _isPressed = true);
-          AppHaptics.tap();
-        },
-        onTapUp: (_) {
-          if (!widget.isEnabled) return;
-          setState(() => _isPressed = false);
-          widget.onToggle();
-        },
-        onTapCancel: () {
-          if (!widget.isEnabled) return;
-          setState(() => _isPressed = false);
-        },
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (d) => _handlePanStart(d, const Size(size, size)),
+        onPanUpdate: (d) => _handlePanUpdate(d, const Size(size, size)),
+        onPanEnd: _handlePanEnd,
+        onPanCancel: _handlePanCancel,
         child: AnimatedScale(
           scale: _isPressed ? 0.94 : 1.0,
           duration: const Duration(milliseconds: 140),
@@ -196,13 +271,15 @@ class _LightDialButtonState extends State<LightDialButton> with TickerProviderSt
                   },
                 ),
 
-                // 2. Outer Sculpted Track Ring
+                // 2. Outer Sculpted Track Ring with Live Rotary Sweep
                 CustomPaint(
                   size: const Size(size, size),
                   painter: _LightRingPainter(
                     isActive: isLit,
                     isEnabled: widget.isEnabled,
                     color: activeColor,
+                    brightness: _displayBrightness,
+                    isScrubbing: _isScrubbing,
                   ),
                 ),
 
@@ -303,7 +380,7 @@ class _LightDialButtonState extends State<LightDialButton> with TickerProviderSt
                       ),
                       const SizedBox(height: 7),
 
-                      // Primary State Outline Container (LIGHTS ON / LIGHTS OFF)
+                      // Primary State Outline Container (LIGHTS ON / LIGHTS OFF or Scrub %%)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.0),
                         decoration: BoxDecoration(
@@ -346,12 +423,14 @@ class _LightDialButtonState extends State<LightDialButton> with TickerProviderSt
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              isLit ? 'LIGHTS ON' : 'LIGHTS OFF',
+                              _isScrubbing
+                                  ? '$_displayPct%'
+                                  : (isLit ? 'LIGHTS ON' : 'LIGHTS OFF'),
                               style: AppTheme.heading(
-                                size: 12.0,
+                                size: _isScrubbing ? 13.0 : 12.0,
                                 color: textColor,
                                 weight: FontWeight.w700,
-                                letterSpacing: 1.2,
+                                letterSpacing: _isScrubbing ? 0.8 : 1.2,
                               ),
                             ),
                           ],
@@ -383,7 +462,7 @@ class _LightDialButtonState extends State<LightDialButton> with TickerProviderSt
                           ],
                         ),
                         child: Text(
-                          _modeSubtitle,
+                          _isScrubbing ? 'ROTARY DIMMER' : _modeSubtitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.center,
@@ -412,11 +491,15 @@ class _LightRingPainter extends CustomPainter {
     required this.isActive,
     required this.isEnabled,
     required this.color,
+    this.brightness = 255,
+    this.isScrubbing = false,
   });
 
   final bool isActive;
   final bool isEnabled;
   final Color color;
+  final int brightness;
+  final bool isScrubbing;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -436,6 +519,35 @@ class _LightRingPainter extends CustomPainter {
       ..strokeWidth = 0.8
       ..color = isEnabled ? AppTheme.border.withValues(alpha: 0.6) : AppTheme.border.withValues(alpha: 0.3);
     canvas.drawCircle(center, radius - 11, innerTrackPaint);
+
+    // Dynamic Rotary Sweep Arc when light is on or actively being scrubbed
+    if ((isActive || isScrubbing) && brightness > 0) {
+      final sweepAngle = (brightness / 255.0) * 2 * math.pi;
+      final arcPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = isScrubbing ? 4.0 : 2.5
+        ..color = color.withValues(alpha: isScrubbing ? 0.95 : 0.65);
+
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -math.pi / 2,
+        sweepAngle,
+        false,
+        arcPaint,
+      );
+
+      // Luminous gemstone bead at current rotary angle tip
+      final tipAngle = -math.pi / 2 + sweepAngle;
+      final tipPos = Offset(
+        center.dx + radius * math.cos(tipAngle),
+        center.dy + radius * math.sin(tipAngle),
+      );
+      final tipGlow = Paint()
+        ..style = PaintingStyle.fill
+        ..color = color;
+      canvas.drawCircle(tipPos, isScrubbing ? 4.5 : 3.0, tipGlow);
+    }
 
     const segmentCount = 24;
     for (var i = 0; i < segmentCount; i++) {
@@ -488,5 +600,9 @@ class _LightRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _LightRingPainter old) =>
-      old.isActive != isActive || old.isEnabled != isEnabled || old.color != color;
+      old.isActive != isActive ||
+      old.isEnabled != isEnabled ||
+      old.color != color ||
+      old.brightness != brightness ||
+      old.isScrubbing != isScrubbing;
 }

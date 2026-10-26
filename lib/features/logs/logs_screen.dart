@@ -153,68 +153,66 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
         .where((l) => !l.isOn)
         .fold<int>(0, (sum, item) => sum + item.durationSeconds);
 
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. Top Telemetry & Flash Status Banner
-              _buildHeaderBanner(
-                totalCount: allLogs.length,
-                onCount: onCount,
-                offCount: offCount,
-                totalRunSeconds: totalRunSeconds,
-                isConnected: conn.isConnected,
-                onSync: _syncLogs,
-                onClear: allLogs.isNotEmpty ? () => _confirmClearLogs(context) : null,
-                onCopy: allLogs.isNotEmpty ? () => _copyLogsToClipboard(allLogs) : null,
-              ),
-              const SizedBox(height: 12),
+    final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight + 8;
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 80;
 
-              // 2. Filter Tab Selector Chips
-              _buildFilterChips(allCount: allLogs.length, onCount: onCount, offCount: offCount),
-              const SizedBox(height: 12),
-
-              // 3. Scrollable Logs Timeline List with Pull-to-Refresh
-              Expanded(
-                child: filteredLogs.isEmpty
-                    ? RefreshIndicator(
-                        color: AppTheme.cyan,
-                        backgroundColor: AppTheme.surfaceRaised,
-                        onRefresh: _syncLogs,
-                        child: ListView(
-                          children: [
-                            SizedBox(
-                              height: MediaQuery.of(context).size.height * 0.5,
-                              child: _buildEmptyState(context, conn.isConnected),
-                            ),
-                          ],
-                        ),
-                      )
-                    : RefreshIndicator(
-                        color: AppTheme.cyan,
-                        backgroundColor: AppTheme.surfaceRaised,
-                        onRefresh: _syncLogs,
-                        child: ListView.separated(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: filteredLogs.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final entry = filteredLogs[index];
-                            return _buildLogCard(entry, index)
-                                .animate()
-                                .fadeIn(duration: 180.ms, delay: (index * 40).ms)
-                                .slideY(begin: 0.08, end: 0, duration: 180.ms);
-                          },
-                        ),
-                      ),
-              ),
-            ],
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, topPadding, 20, bottomPadding),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. Top Telemetry & Flash Status Banner
+          _buildHeaderBanner(
+            totalCount: allLogs.length,
+            onCount: onCount,
+            offCount: offCount,
+            totalRunSeconds: totalRunSeconds,
+            isConnected: conn.isConnected,
+            onSync: _syncLogs,
+            onClear: allLogs.isNotEmpty ? () => _confirmClearLogs(context) : null,
+            onCopy: allLogs.isNotEmpty ? () => _copyLogsToClipboard(allLogs) : null,
           ),
-        ),
+          const SizedBox(height: 12),
+
+          // 2. Filter Tab Selector Chips
+          _buildFilterChips(allCount: allLogs.length, onCount: onCount, offCount: offCount),
+          const SizedBox(height: 12),
+
+          // 3. Scrollable Logs Timeline List with Pull-to-Refresh
+          Expanded(
+            child: filteredLogs.isEmpty
+                ? RefreshIndicator(
+                    color: AppTheme.cyan,
+                    backgroundColor: AppTheme.surfaceRaised,
+                    onRefresh: _syncLogs,
+                    child: ListView(
+                      children: [
+                        SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.5,
+                          child: _buildEmptyState(context, conn.isConnected),
+                        ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    color: AppTheme.cyan,
+                    backgroundColor: AppTheme.surfaceRaised,
+                    onRefresh: _syncLogs,
+                    child: ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      itemCount: filteredLogs.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final entry = filteredLogs[index];
+                        return _buildLogCard(entry, index)
+                            .animate()
+                            .fadeIn(duration: 180.ms, delay: (index * 40).ms)
+                            .slideY(begin: 0.08, end: 0, duration: 180.ms);
+                      },
+                    ),
+                  ),
+          ),
+        ],
       ),
     );
   }

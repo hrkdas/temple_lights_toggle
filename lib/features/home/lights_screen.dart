@@ -42,88 +42,122 @@ class LightsScreen extends ConsumerWidget {
         ? paired
         : paired.where((d) => d.effectiveRoomId == activeRoomId).toList();
 
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        child: Column(
-          children: [
-            // 1. Prominent Connection & Signal Telemetry Card
-            ConnectionCard(
-              connState: conn,
-              isDeviceOn: light.isOn && light.brightness > 0,
-              onDisconnect: () => session.disconnect(),
-              onForget: () => session.forgetDevice(),
-              onScan: () => session.scanAndAutoConnect(),
-            ),
-            const SizedBox(height: 10),
+    final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight + 8;
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 80;
 
-            // 2. Top Glanceable Status Banner
-            _buildGlanceableStatusBanner(paired, light, conn, rooms, ref),
-
-            // 3. Multi-Room Selector & Power Hub
-            if (rooms.isNotEmpty || paired.isNotEmpty)
-              _buildRoomBar(rooms, activeRoomId, paired, ref),
-
-            // 4. Sacred Quick Scenes Bar
-            _buildSacredQuickScenes(scenes, activeRoomId, ref),
-
-            // 5. Room Hero Card (when a specific room is selected)
-            if (activeRoom != null && devicesInActiveRoom.isNotEmpty)
-              _buildRoomHeroCard(activeRoom, devicesInActiveRoom, ref),
-
-            // 6. Main Control Body
-            Expanded(
-              child: Center(
-                child: _buildCenterContent(
-                  context,
-                  conn,
-                  light,
-                  ctrl,
-                  session,
-                  defaultModes,
-                  presets,
-                  paired,
-                  rooms,
-                  activeRoomId,
-                  ref,
+    return Stack(
+      children: [
+        // 1. Serene Living Ambient Bloom (subtle radial glow reflecting light state)
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 380,
+          child: IgnorePointer(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOutCubic,
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0, -0.4),
+                  radius: 1.1,
+                  colors: light.isOn && light.brightness > 0
+                      ? [
+                          Color.fromARGB(255, light.r, light.g, light.b).withValues(alpha: 0.12),
+                          Color.fromARGB(255, light.r, light.g, light.b).withValues(alpha: 0.03),
+                          Colors.transparent,
+                        ]
+                      : [Colors.transparent, Colors.transparent],
+                  stops: const [0.0, 0.55, 1.0],
                 ),
               ),
             ),
-
-            // 7. Bottom Controls (When disconnected or failed)
-            if (conn.phase == ConnPhase.failed ||
-                conn.phase == ConnPhase.disconnected ||
-                conn.phase == ConnPhase.idle) ...[
-              ElevatedButton.icon(
-                icon: const Icon(Icons.radar_rounded, size: 20),
-                label: Text(
-                  conn.isTargetPaired ? 'RECONNECT PAIRED LIGHTS' : 'SCAN & AUTO-CONNECT',
-                  style: AppTheme.heading(size: 14, letterSpacing: 1.5),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.amber,
-                  foregroundColor: Colors.black,
-                  minimumSize: const Size.fromHeight(52),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 4,
-                ),
-                onPressed: () => session.scanAndAutoConnect(),
-              ).animate().fadeIn().slideY(begin: 0.2, end: 0),
-            ],
-            const SizedBox(height: 8),
-          ],
+          ),
         ),
-      ),
+
+        // 2. Single Unified, Smooth-Scrolling Canvas
+        SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(20, topPadding, 20, bottomPadding),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Telemetry / Hero Alert when NOT connected
+              if (!conn.isConnected) ...[
+                ConnectionCard(
+                  connState: conn,
+                  isDeviceOn: light.isOn && light.brightness > 0,
+                  onDisconnect: () => session.disconnect(),
+                  onForget: () => session.forgetDevice(),
+                  onScan: () => session.scanAndAutoConnect(),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // Spatial Sanctuary Header (Streamlined Room Bar, Status & Quick Scenes)
+              if (conn.isConnected && (rooms.isNotEmpty || paired.isNotEmpty || scenes.isNotEmpty)) ...[
+                _buildSpatialSanctuaryHeader(paired, light, conn, rooms, activeRoomId, scenes, ref),
+                const SizedBox(height: 12),
+              ],
+
+              // Room Hero Card (when a specific room is selected and has devices)
+              if (conn.isConnected && activeRoom != null && devicesInActiveRoom.isNotEmpty) ...[
+                _buildRoomHeroCard(activeRoom, devicesInActiveRoom, ref),
+                const SizedBox(height: 12),
+              ],
+
+              // Main Control Content
+              _buildCenterContent(
+                context,
+                conn,
+                light,
+                ctrl,
+                session,
+                defaultModes,
+                presets,
+                paired,
+                rooms,
+                activeRoomId,
+                ref,
+              ),
+
+              // Bottom Reconnect Action when disconnected
+              if (conn.phase == ConnPhase.failed ||
+                  conn.phase == ConnPhase.disconnected ||
+                  conn.phase == ConnPhase.idle) ...[
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.radar_rounded, size: 20),
+                  label: Text(
+                    conn.isTargetPaired ? 'RECONNECT PAIRED LIGHTS' : 'SCAN & AUTO-CONNECT',
+                    style: AppTheme.heading(size: 14, letterSpacing: 1.5),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.amber,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 4,
+                  ),
+                  onPressed: () => session.scanAndAutoConnect(),
+                ).animate().fadeIn().slideY(begin: 0.2, end: 0),
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _buildGlanceableStatusBanner(
+  Widget _buildSpatialSanctuaryHeader(
     List<PairedDevice> paired,
     LightState light,
     ConnState conn,
     List<RoomModel> rooms,
+    String? activeRoomId,
+    List<SacredScene> scenes,
     WidgetRef ref,
   ) {
     int activeCount = 0;
@@ -154,55 +188,167 @@ class LightsScreen extends ConsumerWidget {
         : activeRoomNames.take(2).join(' & ');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: isAnyOn ? AppTheme.amber.withValues(alpha: 0.12) : AppTheme.surfaceRaised,
-        borderRadius: BorderRadius.circular(12),
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isAnyOn ? AppTheme.amber.withValues(alpha: 0.3) : AppTheme.border,
+          color: isAnyOn ? AppTheme.amber.withValues(alpha: 0.35) : AppTheme.border,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF3B2E1E).withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Row 1: Room Selector Chips & Master Power
           Row(
             children: [
-              Icon(
-                isAnyOn ? Icons.lightbulb_rounded : Icons.lightbulb_outline_rounded,
-                size: 16,
-                color: isAnyOn ? AppTheme.amber : AppTheme.textMuted,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                isAnyOn
-                    ? '$activeCount light${activeCount > 1 ? "s" : ""} on • $roomSummary'
-                    : 'All lights in standby',
-                style: AppTheme.body(
-                  size: 11.5,
-                  color: isAnyOn ? AppTheme.amber : AppTheme.textMuted,
-                  weight: isAnyOn ? FontWeight.w600 : FontWeight.w400,
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(
+                    children: [
+                      _buildRoomChip(
+                        label: 'All Rooms',
+                        icon: '🏠',
+                        count: paired.length,
+                        isSelected: activeRoomId == null,
+                        onTap: () {
+                          AppHaptics.selection();
+                          ref.read(activeRoomIdProvider.notifier).state = null;
+                        },
+                      ),
+                      const SizedBox(width: 6),
+                      ...rooms.map((room) {
+                        final count = paired.where((d) => d.effectiveRoomId == room.id).length;
+                        final isSelected = activeRoomId == room.id;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: _buildRoomChip(
+                            label: room.name,
+                            icon: room.iconEmoji,
+                            count: count,
+                            isSelected: isSelected,
+                            onTap: () {
+                              AppHaptics.selection();
+                              ref.read(activeRoomIdProvider.notifier).state = room.id;
+                            },
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
                 ),
               ),
+              if (isAnyOn) ...[
+                const SizedBox(width: 8),
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () async {
+                    await AppHaptics.medium();
+                    await ref.read(roomsProvider.notifier).syncRoomPower('all', false);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.amber.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppTheme.amber.withValues(alpha: 0.35)),
+                    ),
+                    child: Text(
+                      'ALL OFF',
+                      style: AppTheme.mono(size: 9.5, color: AppTheme.amber, weight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
-          if (isAnyOn)
-            InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () async {
-                await AppHaptics.medium();
-                await ref.read(roomsProvider.notifier).syncRoomPower('all', false);
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppTheme.amber.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(6),
+
+          // Row 2: Status Summary line
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 8),
+            child: Row(
+              children: [
+                Icon(
+                  isAnyOn ? Icons.lightbulb_rounded : Icons.lightbulb_outline_rounded,
+                  size: 14,
+                  color: isAnyOn ? AppTheme.amber : AppTheme.textMuted,
                 ),
-                child: Text(
-                  'ALL OFF',
-                  style: AppTheme.mono(size: 9.5, color: AppTheme.amber, weight: FontWeight.w700),
+                const SizedBox(width: 6),
+                Text(
+                  isAnyOn
+                      ? '$activeCount light${activeCount > 1 ? "s" : ""} on • $roomSummary'
+                      : 'All lights in standby',
+                  style: AppTheme.body(
+                    size: 11,
+                    color: isAnyOn ? AppTheme.amber : AppTheme.textMuted,
+                    weight: isAnyOn ? FontWeight.w600 : FontWeight.w400,
+                  ),
                 ),
+              ],
+            ),
+          ),
+
+          // Row 3: Sacred Quick Scenes Bar
+          if (scenes.isNotEmpty)
+            SizedBox(
+              height: 32,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                itemCount: scenes.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (context, index) {
+                  final scene = scenes[index];
+                  final sceneColor = Color.fromARGB(255, scene.r, scene.g, scene.b);
+
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () async {
+                      await AppHaptics.selection();
+                      await ref.read(roomsProvider.notifier).syncRoomScene(
+                            activeRoomId ?? 'all',
+                            scene,
+                          );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceRaised,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(scene.emoji, style: const TextStyle(fontSize: 12)),
+                          const SizedBox(width: 5),
+                          Text(
+                            scene.name,
+                            style: AppTheme.heading(size: 10.5, color: AppTheme.textSecondary),
+                          ),
+                          const SizedBox(width: 4),
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: sceneColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
         ],
@@ -210,63 +356,58 @@ class LightsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildSacredQuickScenes(
-    List<SacredScene> scenes,
-    String? activeRoomId,
-    WidgetRef ref,
-  ) {
-    return Container(
-      height: 38,
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        itemCount: scenes.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 6),
-        itemBuilder: (context, index) {
-          final scene = scenes[index];
-          final sceneColor = Color.fromARGB(255, scene.r, scene.g, scene.b);
+  Widget _buildQuickBrightnessChips(LightState light, LightControlNotifier ctrl) {
+    final pct = ((light.brightness / 255.0) * 100).round();
 
-          return InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: () async {
-              await AppHaptics.selection();
-              await ref.read(roomsProvider.notifier).syncRoomScene(
-                activeRoomId ?? 'all',
-                scene,
-              );
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [25, 50, 75, 100].map((preset) {
+        final targetVal = ((preset / 100.0) * 255).round();
+        final isCurrent = light.isOn && pct == preset;
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () {
+              AppHaptics.selection();
+              if (!light.isOn) {
+                ctrl.togglePower();
+              }
+              ctrl.commitBrightness(targetVal);
             },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
-                color: AppTheme.surfaceRaised,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppTheme.border),
+                color: isCurrent ? AppTheme.amber.withValues(alpha: 0.18) : AppTheme.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isCurrent ? AppTheme.amber : AppTheme.border,
+                  width: isCurrent ? 1.4 : 1.0,
+                ),
+                boxShadow: isCurrent
+                    ? [
+                        BoxShadow(
+                          color: AppTheme.amber.withValues(alpha: 0.15),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
+                    : null,
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(scene.emoji, style: const TextStyle(fontSize: 13)),
-                  const SizedBox(width: 6),
-                  Text(
-                    scene.name,
-                    style: AppTheme.heading(size: 11, color: AppTheme.textSecondary),
-                  ),
-                  const SizedBox(width: 4),
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: sceneColor,
-                    ),
-                  ),
-                ],
+              child: Text(
+                '$preset%',
+                style: AppTheme.mono(
+                  size: 11,
+                  color: isCurrent ? AppTheme.amber : AppTheme.textSecondary,
+                  weight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                ),
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -440,72 +581,75 @@ class LightsScreen extends ConsumerWidget {
           : null;
       final roomLabel = activeRoom?.name ?? 'Puja Mandir';
 
-      return SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.only(top: 4, bottom: 20),
-        child: Column(
-          children: [
-            // Next-Gen Split-Tile Device Card (Tap body opens DeepControlSheet, drag scrubs, tap icon toggles power)
-            SplitTileCard(
-              name: activeDev?.displayName ?? conn.deviceName ?? 'Temple Lights',
-              roomLabel: '$roomLabel • Linked',
-              isOn: light.isOn,
-              brightness: light.brightness,
-              color: Color.fromARGB(255, light.r, light.g, light.b),
-              modeLabel: light.modeName,
-              onTogglePower: () => ctrl.togglePower(),
-              onOpenDetail: () => DeepControlSheet.show(context),
-              onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
-            ),
+      return Column(
+        children: [
+          // Center Porcelain Power Dial with Rotary Touch Dimming
+          LightDialButton(
+            isOn: light.isOn,
+            mode: light.mode,
+            brightness: light.brightness,
+            r: light.r,
+            g: light.g,
+            b: light.b,
+            isEnabled: true,
+            onToggle: () => ctrl.togglePower(),
+            onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
+            onBrightnessCommit: (val) => ctrl.commitBrightness(val),
+          ).animate().scale(begin: const Offset(0.92, 0.92), end: const Offset(1, 1), curve: Curves.elasticOut),
 
-            const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
-            // Center Power Dial
-            LightDialButton(
-              isOn: light.isOn,
-              mode: light.mode,
-              brightness: light.brightness,
-              r: light.r,
-              g: light.g,
-              b: light.b,
-              isEnabled: true,
-              onToggle: () => ctrl.togglePower(),
-            ).animate().scale(begin: const Offset(0.92, 0.92), end: const Offset(1, 1), curve: Curves.elasticOut),
+          // Quick-Snap Brightness Chips directly beneath the dial
+          _buildQuickBrightnessChips(light, ctrl),
 
-            const SizedBox(height: 18),
+          const SizedBox(height: 16),
 
-            // Mode Selector Cards
-            _buildModeSelector(light, ctrl, defaultModes, presets),
+          // Next-Gen Split-Tile Device Card (Tap body opens DeepControlSheet, drag scrubs, tap icon toggles power)
+          SplitTileCard(
+            name: activeDev?.displayName ?? conn.deviceName ?? 'Temple Lights',
+            roomLabel: '$roomLabel • Linked',
+            isOn: light.isOn,
+            brightness: light.brightness,
+            color: Color.fromARGB(255, light.r, light.g, light.b),
+            modeLabel: light.modeName,
+            onTogglePower: () => ctrl.togglePower(),
+            onOpenDetail: () => DeepControlSheet.show(context),
+            onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
+          ),
 
-            const SizedBox(height: 14),
+          const SizedBox(height: 14),
 
-            // Dedicated Kelvin Warmth Slider (2000K to 6500K)
-            KelvinWarmthSlider(
-              initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
-              onChanged: (k, r, g, b) => ctrl.setLiveRgb(r, g, b),
-              onChangeEnd: (k, r, g, b) => ctrl.setRgb(r, g, b),
-            ),
+          // Mode Selector Cards
+          _buildModeSelector(light, ctrl, defaultModes, presets),
 
-            const SizedBox(height: 14),
+          const SizedBox(height: 14),
 
-            // Brightness Slider Card
-            _buildBrightnessCard(light, ctrl),
+          // Dedicated Kelvin Warmth Slider (2000K to 6500K)
+          KelvinWarmthSlider(
+            initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
+            onChanged: (k, r, g, b) => ctrl.setLiveRgb(r, g, b),
+            onChangeEnd: (k, r, g, b) => ctrl.setRgb(r, g, b),
+          ),
 
-            const SizedBox(height: 14),
+          const SizedBox(height: 14),
 
-            // Interactive LED Strip Ruler & Range Selection Card
-            _buildStripRulerCard(context, light, ctrl),
+          // Brightness Slider Card
+          _buildBrightnessCard(light, ctrl),
 
-            const SizedBox(height: 14),
+          const SizedBox(height: 14),
 
-            // Custom RGB Color Palette (always accessible)
-            _buildRgbPaletteCard(context, light, ctrl),
-            const SizedBox(height: 14),
+          // Interactive LED Strip Ruler & Range Selection Card
+          _buildStripRulerCard(context, light, ctrl),
 
-            // Quick Auto-Off Timer
-            const AutoOffTimerWidget(),
-          ],
-        ),
+          const SizedBox(height: 14),
+
+          // Custom RGB Color Palette (always accessible)
+          _buildRgbPaletteCard(context, light, ctrl),
+          const SizedBox(height: 14),
+
+          // Quick Auto-Off Timer
+          const AutoOffTimerWidget(),
+        ],
       );
     }
 
@@ -562,91 +706,6 @@ class LightsScreen extends ConsumerWidget {
         ],
       ],
     ).animate().fadeIn(duration: 200.ms);
-  }
-
-  Widget _buildRoomBar(
-    List<RoomModel> rooms,
-    String? activeRoomId,
-    List<PairedDevice> pairedDevices,
-    WidgetRef ref,
-  ) {
-    if (rooms.isEmpty && pairedDevices.length <= 1) return const SizedBox.shrink();
-
-    final activeRoom = rooms.where((r) => r.id == activeRoomId).firstOrNull;
-    final devicesInActiveRoom = activeRoomId == null
-        ? pairedDevices
-        : pairedDevices.where((d) => d.effectiveRoomId == activeRoomId).toList();
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  _buildRoomChip(
-                    label: 'All Rooms',
-                    icon: '🏠',
-                    count: pairedDevices.length,
-                    isSelected: activeRoomId == null,
-                    onTap: () {
-                      AppHaptics.selection();
-                      ref.read(activeRoomIdProvider.notifier).state = null;
-                    },
-                  ),
-                  const SizedBox(width: 6),
-                  ...rooms.map((room) {
-                    final count = pairedDevices.where((d) => d.effectiveRoomId == room.id).length;
-                    final isSelected = activeRoomId == room.id;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: _buildRoomChip(
-                        label: room.name,
-                        icon: room.iconEmoji,
-                        count: count,
-                        isSelected: isSelected,
-                        onTap: () {
-                          AppHaptics.selection();
-                          ref.read(activeRoomIdProvider.notifier).state = room.id;
-                        },
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            ),
-          ),
-          if (activeRoom != null && devicesInActiveRoom.isNotEmpty) ...[
-            const SizedBox(width: 8),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.power_settings_new_rounded, size: 14, color: Colors.white),
-              label: Text('Room Power', style: AppTheme.heading(size: 10, color: Colors.white)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.amber,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                minimumSize: const Size(60, 30),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () async {
-                await AppHaptics.medium();
-                final anyOn = devicesInActiveRoom.any((d) => d.cachedIsOn == true);
-                await ref.read(roomsProvider.notifier).toggleRoomPower(activeRoom.id, !anyOn);
-              },
-            ),
-          ],
-        ],
-      ),
-    );
   }
 
   Widget _buildRoomChip({

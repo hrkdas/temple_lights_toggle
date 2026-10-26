@@ -196,6 +196,7 @@ class LightState {
     this.activePreset = 0,
     this.cycleFlags = 0x07,
     this.segments = const [],
+    this.rainmakerNodeId,
   });
 
   final bool isOn;
@@ -214,6 +215,7 @@ class LightState {
   final int activePreset;
   final int cycleFlags;
   final List<LedSegment> segments;
+  final String? rainmakerNodeId;
 
   static const List<String> colorOrderNames = [
     'RGB (Standard / Default)',
@@ -302,6 +304,7 @@ class LightState {
     int? activePreset,
     int? cycleFlags,
     List<LedSegment>? segments,
+    String? rainmakerNodeId,
   }) =>
       LightState(
         isOn: isOn ?? this.isOn,
@@ -322,6 +325,7 @@ class LightState {
         activePreset: activePreset ?? this.activePreset,
         cycleFlags: cycleFlags ?? this.cycleFlags,
         segments: segments ?? this.segments,
+        rainmakerNodeId: rainmakerNodeId ?? this.rainmakerNodeId,
       );
 
   static const idle = LightState();

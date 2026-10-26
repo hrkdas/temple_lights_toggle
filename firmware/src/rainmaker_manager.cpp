@@ -43,6 +43,7 @@ static int  s_cachedCct = 2700;
 
 // Flag to prevent echo loops when RainMaker itself writes values
 static bool s_inRainmakerCallback = false;
+static unsigned long s_lastCloudWriteMs = 0;
 
 // ============================================================================
 // COLOR CONVERSIONS (HSV -> RGB & KELVIN -> RGB)
@@ -269,6 +270,7 @@ static void rainmakerWriteCallback(Device *device, Param *param, const param_val
         Serial.printf("[RMAKER] CCT -> %dK (RGB: %d,%d,%d)\n", s_cachedCct, r, g, b);
     }
 
+    s_lastCloudWriteMs = millis();
     s_inRainmakerCallback = false;
 }
 
@@ -340,6 +342,7 @@ void rainmakerManagerReportState(bool is_on, uint8_t bright, uint8_t r, uint8_t 
     // Debounce state reporting to avoid flooding MQTT
     unsigned long now = millis();
     if (now - s_lastReportMs < 150) return;
+    if (now - s_lastCloudWriteMs < 500) return; // Prevent echo loop from recent cloud write
     s_lastReportMs = now;
 
     int brightPercent = (int)map(bright, 0, 255, 0, 100);
@@ -357,6 +360,12 @@ void rainmakerManagerReportState(bool is_on, uint8_t bright, uint8_t r, uint8_t 
         int estK = rgbToKelvinEstimate(r, g, b);
         s_pLight->updateAndReportParam(ESP_RMAKER_DEF_CCT_NAME, estK);
     }
+}
+
+void rainmakerManagerUpdateDeviceName(const char* newName) {
+    if (!s_pLight || !newName || strlen(newName) == 0) return;
+    s_pLight->updateAndReportParam(ESP_RMAKER_DEF_NAME_PARAM, newName);
+    Serial.printf("[RMAKER] Device name updated in cloud: %s\n", newName);
 }
 
 // ============================================================================

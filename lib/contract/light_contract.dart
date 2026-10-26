@@ -272,6 +272,9 @@ class LightPacketEncoder {
   static Uint8List encodeHwTest() =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'hw_test'})));
 
+  static Uint8List encodeGetRmakerInfo() =>
+      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'get_rmaker_info'})));
+
   static Uint8List encodeSetPreset(int index) =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'set_preset', 'idx': index})));
 

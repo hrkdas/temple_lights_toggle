@@ -47,6 +47,7 @@ class BackupService {
     final schedules = _kv.getJsonList(KvKeys.savedSchedules) ?? [];
     final lastId = _kv.getString(KvKeys.lastConnectedId);
     final lastName = _kv.getString(KvKeys.lastConnectedName);
+    final rmakerEmail = _kv.getString(KvKeys.rainmakerEmail);
 
     final payload = <String, dynamic>{
       'version': 2,
@@ -59,6 +60,7 @@ class BackupService {
       'schedules': schedules,
       'lastConnectedId': lastId,
       'lastConnectedName': lastName,
+      if (rmakerEmail != null) 'rainmakerEmail': rmakerEmail,
     };
 
     return const JsonEncoder.withIndent('  ').convert(payload);
@@ -219,6 +221,9 @@ class BackupService {
     if (decoded['lastConnectedName'] is String) {
       await _kv.putString(KvKeys.lastConnectedName, decoded['lastConnectedName'] as String);
     }
+    if (decoded['rainmakerEmail'] is String) {
+      await _kv.putString(KvKeys.rainmakerEmail, decoded['rainmakerEmail'] as String);
+    }
 
     // 6. Reload all active providers
     ref.read(pairedDevicesProvider.notifier).loadFromKv();
@@ -226,6 +231,7 @@ class BackupService {
     ref.read(roomsProvider.notifier).loadFromKv();
     ref.read(schedulesProvider.notifier).loadFromKv();
     ref.read(defaultModesProvider.notifier).loadFromKv();
+    ref.read(rainmakerAuthProvider.notifier).refreshNodes();
 
     _log.i(
       'Backup restore complete: ${sanitizedDevices.length} devices, ${sanitizedPresets.length} presets, '

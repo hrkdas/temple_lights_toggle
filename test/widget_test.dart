@@ -415,5 +415,87 @@ void main() {
       // Ensure text is not white (luminance < 0.1 so it contrasts with white porcelain)
       expect(textWidget.style?.color, const Color(0xFF1C1917));
     });
+
+    testWidgets('Rotary scrub on outer ring scrubs brightness and commits on release', (tester) async {
+      int scrubbedVal = 0;
+      int committedVal = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: LightDialButton(
+                isOn: true,
+                mode: 0,
+                brightness: 128,
+                r: 255,
+                g: 147,
+                b: 41,
+                isEnabled: true,
+                onToggle: () {},
+                onBrightnessScrub: (v) => scrubbedVal = v,
+                onBrightnessCommit: (v) => committedVal = v,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final dialCenter = tester.getCenter(find.byType(LightDialButton));
+      // Start drag at 3 o'clock on outer ring (radius ~ 90px from center)
+      final startPos = dialCenter + const Offset(90, 0);
+
+      final gesture = await tester.startGesture(startPos);
+      await tester.pump();
+      // At 3 o'clock, angle from 12 o'clock is 90 deg / 360 = 25% brightness (~64)
+      expect(scrubbedVal, greaterThan(50));
+      expect(scrubbedVal, lessThan(80));
+
+      // Drag to 6 o'clock (180 deg / 360 = 50% brightness (~128))
+      await gesture.moveTo(dialCenter + const Offset(0, 90));
+      await tester.pump();
+      expect(scrubbedVal, greaterThan(115));
+      expect(scrubbedVal, lessThan(140));
+
+      // Release gesture
+      await gesture.up();
+      await tester.pump();
+      expect(committedVal, equals(scrubbedVal));
+    });
+
+    testWidgets('Center drag/tap toggles power rather than scrubbing brightness', (tester) async {
+      bool toggled = false;
+      int scrubbedVal = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: LightDialButton(
+                isOn: true,
+                mode: 0,
+                brightness: 128,
+                r: 255,
+                g: 147,
+                b: 41,
+                isEnabled: true,
+                onToggle: () => toggled = true,
+                onBrightnessScrub: (v) => scrubbedVal = v,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final dialCenter = tester.getCenter(find.byType(LightDialButton));
+      // Tap at the exact center (radius 0 < 68)
+      final gesture = await tester.startGesture(dialCenter);
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(toggled, isTrue);
+      expect(scrubbedVal, equals(0)); // Scrubbing was not triggered
+    });
   });
 }

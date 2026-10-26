@@ -154,6 +154,38 @@ void main() {
         throwsA(isA<FormatException>()),
       );
     });
+
+    test('Backup and restore preserves rainmakerEmail with backward compatibility', () async {
+      final service = BackupService(kv);
+      await kv.putString(KvKeys.rainmakerEmail, 'user@templelights.org');
+
+      final backupStr = service.createBackupJson();
+      final decoded = jsonDecode(backupStr) as Map<String, dynamic>;
+      expect(decoded['rainmakerEmail'], 'user@templelights.org');
+
+      // Clear kv
+      await kv.remove(KvKeys.rainmakerEmail);
+      expect(kv.getString(KvKeys.rainmakerEmail), isNull);
+
+      final container = ProviderContainer(
+        overrides: [
+          kvStoreProvider.overrideWithValue(kv),
+        ],
+      );
+
+      // Restore and verify rainmakerEmail is restored
+      await service.restoreBackupJson(backupStr, ref: _MockWidgetRef(container));
+      expect(kv.getString(KvKeys.rainmakerEmail), 'user@templelights.org');
+
+      // Verify that restoring a legacy backup without rainmakerEmail does not crash or corrupt
+      final legacyPayload = jsonEncode({
+        'version': 1,
+        'devices': [],
+        'modes': [],
+      });
+      await service.restoreBackupJson(legacyPayload, ref: _MockWidgetRef(container));
+      // Still safe and no crash
+    });
   });
 
   group('Multi-Room Architecture & Device Assignment Tests', () {
@@ -395,6 +427,24 @@ void main() {
       expect(restored.transitionStyle, 3);
       expect(restored.ambientStyle, 2);
       expect(restored.ambientDepth, 8);
+    });
+
+    test('PairedDevice serialization preserves rainmakerNodeId and isGoogleHomeLinked', () {
+      final dev = PairedDevice(
+        id: 'ESP32_NODE_01',
+        name: 'Sanctuary Light',
+        lastSeen: DateTime.now(),
+        rainmakerNodeId: 'rmaker_node_abc123',
+        isGoogleHomeLinked: true,
+      );
+
+      final jsonMap = dev.toJson();
+      expect(jsonMap['rainmakerNodeId'], 'rmaker_node_abc123');
+      expect(jsonMap['isGoogleHomeLinked'], true);
+
+      final restored = PairedDevice.fromJson(jsonMap);
+      expect(restored.rainmakerNodeId, 'rmaker_node_abc123');
+      expect(restored.isGoogleHomeLinked, true);
     });
   });
 }

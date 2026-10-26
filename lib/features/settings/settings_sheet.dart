@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../contract/light_contract.dart';
 import '../../core/haptics.dart';
 import '../../core/log.dart';
@@ -108,6 +109,191 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     );
   }
 
+  Future<void> _launchUrlHelper(String urlStr) async {
+    try {
+      final uri = Uri.parse(urlStr);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        // Fallback to web if custom app scheme fails
+        if (urlStr.startsWith('googlehome://')) {
+          final fallback = Uri.parse('https://assistant.google.com/services/a/uid/0000009852277dbd');
+          await launchUrl(fallback, mode: LaunchMode.externalApplication);
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _showRainmakerLoginDialog(BuildContext context) {
+    final emailController = TextEditingController();
+    final passController = TextEditingController();
+    bool isSubmitting = false;
+    String? localError;
+
+    showDialog<void>(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDlgState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.amber.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.cloud_sync_rounded, color: AppTheme.amber, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Espressif Sign In', style: AppTheme.heading(size: 16)),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Sign in to link your Espressif RainMaker account with Google Home.',
+                style: AppTheme.body(size: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 16),
+
+              // Prominent Google Sign-In Button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.g_mobiledata_rounded, size: 28, color: Colors.black),
+                  label: Text('Continue with Google', style: AppTheme.heading(size: 13, color: Colors.black)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: AppTheme.borderBright),
+                    ),
+                  ),
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          setDlgState(() {
+                            isSubmitting = true;
+                            localError = null;
+                          });
+                          final ok = await ref.read(rainmakerAuthProvider.notifier).loginWithGoogle();
+                          if (context.mounted) {
+                            if (ok) {
+                              Navigator.of(dlgCtx).pop();
+                              AppHaptics.success();
+                            } else {
+                              final err = ref.read(rainmakerAuthProvider).errorMessage;
+                              setDlgState(() {
+                                isSubmitting = false;
+                                localError = err;
+                              });
+                            }
+                          }
+                        },
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              Row(
+                children: [
+                  const Expanded(child: Divider(color: AppTheme.border)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Text('OR WITH EMAIL', style: AppTheme.mono(size: 10, color: AppTheme.textMuted)),
+                  ),
+                  const Expanded(child: Divider(color: AppTheme.border)),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              TextField(
+                controller: emailController,
+                keyboardType: TextInputType.emailAddress,
+                style: AppTheme.body(size: 13),
+                decoration: InputDecoration(
+                  labelText: 'Email Address',
+                  labelStyle: AppTheme.body(size: 12, color: AppTheme.textSecondary),
+                  prefixIcon: const Icon(Icons.email_outlined, size: 18),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passController,
+                obscureText: true,
+                style: AppTheme.body(size: 13),
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  labelStyle: AppTheme.body(size: 12, color: AppTheme.textSecondary),
+                  prefixIcon: const Icon(Icons.lock_outline_rounded, size: 18),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+              ),
+              if (localError != null) ...[
+                const SizedBox(height: 10),
+                Text(localError!, style: AppTheme.body(size: 11, color: AppTheme.red)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dlgCtx).pop(),
+              child: Text('Cancel', style: AppTheme.body(size: 13, color: AppTheme.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.amber,
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final email = emailController.text.trim();
+                      final pass = passController.text;
+                      if (email.isEmpty || pass.isEmpty) {
+                        setDlgState(() => localError = 'Please enter both email and password.');
+                        return;
+                      }
+                      setDlgState(() {
+                        isSubmitting = true;
+                        localError = null;
+                      });
+
+                      final success = await ref.read(rainmakerAuthProvider.notifier).login(email, pass);
+                      if (context.mounted) {
+                        if (success) {
+                          Navigator.of(dlgCtx).pop();
+                          AppHaptics.success();
+                        } else {
+                          final err = ref.read(rainmakerAuthProvider).errorMessage ?? 'Login failed';
+                          setDlgState(() {
+                            isSubmitting = false;
+                            localError = err;
+                          });
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : Text('Sign In with Email', style: AppTheme.heading(size: 13, color: Colors.black)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showGoogleHomeGuide(BuildContext context) {
     AppHaptics.light();
     showModalBottomSheet<void>(
@@ -120,83 +306,262 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppTheme.borderBright,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
                   decoration: BoxDecoration(
-                    color: AppTheme.cyan.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(Icons.home_outlined, size: 24, color: AppTheme.cyan),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Google Home Setup', style: AppTheme.heading(size: 18)),
-                      const SizedBox(height: 2),
-                      Text('Control via Google Assistant & Google Home App', style: AppTheme.body(size: 12, color: AppTheme.textSecondary)),
-                    ],
+                    color: AppTheme.borderBright,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            _buildGuideStep(
-              step: '1',
-              title: 'Connect Wi-Fi to your ESP32',
-              desc: 'Open the Wi-Fi setup sheet in Temple Lights and connect the light to your 2.4 GHz home Wi-Fi network.',
-            ),
-            const SizedBox(height: 14),
-            _buildGuideStep(
-              step: '2',
-              title: 'Open Google Home App',
-              desc: 'On your phone, open the Google Home app, tap the "+" button, then select "Works with Google".',
-            ),
-            const SizedBox(height: 14),
-            _buildGuideStep(
-              step: '3',
-              title: 'Link "ESP RainMaker"',
-              desc: 'Search for "ESP RainMaker", log in with your account, and tap Authorize. Your Temple Lights will appear automatically!',
-            ),
-            const SizedBox(height: 14),
-            _buildGuideStep(
-              step: '4',
-              title: 'Enjoy Voice & App Control',
-              desc: 'Say "Hey Google, turn on Temple Lights" or "Hey Google, set brightness to 40%". Both Google Home and this app stay synchronized.',
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.cyan,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: Text('Done', style: AppTheme.heading(size: 14, color: Colors.black)),
               ),
-            ),
-          ],
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.cyan.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.home_outlined, size: 24, color: AppTheme.cyan),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Google Home Setup', style: AppTheme.heading(size: 18)),
+                        const SizedBox(height: 2),
+                        Text('Control via Google Assistant & Google Home App', style: AppTheme.body(size: 12, color: AppTheme.textSecondary)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // In-App Espressif Account Link Card
+              Consumer(
+                builder: (context, ref, _) {
+                  final auth = ref.watch(rainmakerAuthProvider);
+                  final activeDev = ref.watch(activeDeviceProvider);
+                  final light = ref.watch(lightControlProvider);
+                  final nodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
+
+                  if (auth.isLoggedIn) {
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.green.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.green.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.check_circle_rounded, size: 16, color: AppTheme.green),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Linked: ${auth.email}',
+                                  style: AppTheme.heading(size: 13, color: AppTheme.green),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () => ref.read(rainmakerAuthProvider.notifier).logout(),
+                                child: Text('Sign Out', style: AppTheme.body(size: 11, color: AppTheme.red)),
+                              ),
+                            ],
+                          ),
+                          if (nodeId != null && nodeId.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text('Device Node: $nodeId', style: AppTheme.mono(size: 11, color: AppTheme.textSecondary)),
+                                ),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppTheme.green,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  ),
+                                  onPressed: () async {
+                                    final ok = await ref.read(rainmakerAuthProvider.notifier).mapActiveDevice(nodeId: nodeId);
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text(ok ? 'Device successfully linked to account!' : 'Failed to link device.')),
+                                      );
+                                    }
+                                  },
+                                  child: Text('Bind Light', style: AppTheme.heading(size: 11, color: Colors.white)),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  } else {
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceRaised,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.borderBright),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Direct Espressif Cloud Linking', style: AppTheme.heading(size: 13)),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Sign in to your Espressif RainMaker account so this device is bound to your email automatically.',
+                            style: AppTheme.body(size: 11.5, color: AppTheme.textSecondary),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.g_mobiledata_rounded, size: 28, color: Colors.black),
+                              label: Text('Sign In with Google', style: AppTheme.heading(size: 13, color: Colors.black)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  side: const BorderSide(color: AppTheme.borderBright),
+                                ),
+                              ),
+                              onPressed: () async {
+                                final ok = await ref.read(rainmakerAuthProvider.notifier).loginWithGoogle();
+                                if (context.mounted) {
+                                  if (ok) {
+                                    AppHaptics.success();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Signed in with Google & linked to Espressif Cloud!'),
+                                        backgroundColor: AppTheme.green,
+                                      ),
+                                    );
+                                  } else {
+                                    final err = ref.read(rainmakerAuthProvider).errorMessage;
+                                    if (err != null) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text(err), backgroundColor: AppTheme.red),
+                                      );
+                                    }
+                                  }
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.email_outlined, size: 16),
+                              label: const Text('Sign In with Email & Password'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppTheme.textSecondary,
+                                side: const BorderSide(color: AppTheme.border),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              onPressed: () => _showRainmakerLoginDialog(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+
+              _buildGuideStep(
+                step: '1',
+                title: 'One-Time Cloud Claim (Classic ESP32)',
+                desc: 'Classic ESP32 boards need a 1-time certificate claim to bind with your account. Run "esp-rainmaker-cli claim" via USB, or add via the official ESP RainMaker app.',
+              ),
+              const SizedBox(height: 14),
+              _buildGuideStep(
+                step: '2',
+                title: 'Connect 2.4 GHz Wi-Fi',
+                desc: 'In this app, open the Wi-Fi setup sheet and connect your light to your home Wi-Fi network.',
+              ),
+              const SizedBox(height: 14),
+              _buildGuideStep(
+                step: '3',
+                title: 'Check ESP RainMaker Mobile App',
+                desc: 'Open the ESP RainMaker app on your phone. "Temple Lights" must appear here first before Google Home can discover it.',
+              ),
+              const SizedBox(height: 14),
+              _buildGuideStep(
+                step: '4',
+                title: 'Link with Google Home ("Works with Google")',
+                desc: 'In the Google Home app, tap "+" > "Works with Google" > search "ESP RainMaker" and sign in. Your Temple Lights will be imported instantly!',
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.cloud_sync_rounded, size: 16, color: Colors.white),
+                      label: Text('1. Open RainMaker', style: AppTheme.heading(size: 12, color: Colors.white)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.gold,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => _launchUrlHelper('https://rainmaker.espressif.com'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.home_rounded, size: 16, color: Colors.white),
+                      label: Text('2. Open Google Home', style: AppTheme.heading(size: 12, color: Colors.white)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.cyan,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => _launchUrlHelper('googlehome://'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.surfaceRaised,
+                    foregroundColor: AppTheme.textPrimary,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text('Close', style: AppTheme.heading(size: 13, color: AppTheme.textPrimary)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -791,9 +1156,13 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                 Consumer(
                                   builder: (context, ref, _) {
                                     final activeDev = ref.watch(activeDeviceProvider);
-                                    final isLinked = activeDev?.isGoogleHomeLinked ?? false;
+                                    final auth = ref.watch(rainmakerAuthProvider);
+                                    final isLinked = (activeDev?.isGoogleHomeLinked ?? false) || auth.isLoggedIn;
+                                    final subtitle = auth.isLoggedIn
+                                        ? 'Account: ${auth.email}'
+                                        : (isLinked ? 'Status: Linked with Google Home' : 'Free Cloud Integration via ESP RainMaker');
                                     return Text(
-                                      isLinked ? 'Status: Linked with Google Home' : 'Free Cloud Integration via ESP RainMaker',
+                                      subtitle,
                                       style: AppTheme.mono(size: 11, color: isLinked ? AppTheme.green : AppTheme.textSecondary),
                                     );
                                   },

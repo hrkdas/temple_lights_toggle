@@ -70,5 +70,16 @@
 	<string>Temple Lights uses Bluetooth to automatically find, connect, and control your RGB light strip.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Temple Lights uses Bluetooth to connect to and control your RGB light strip.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rainmaker</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

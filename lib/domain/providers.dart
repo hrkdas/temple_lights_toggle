@@ -14,6 +14,8 @@ import '../transport/ble_client.dart';
 import '../transport/ota_chunker.dart';
 import '../transport/ota_protocol.dart';
 import '../transport/scanner.dart';
+import '../services/rainmaker_cloud_service.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'models.dart';
 
 final _log = AppLog.tag('domain');
@@ -151,6 +153,19 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     await _persist();
   }
 
+  Future<void> upsertDevice(PairedDevice device) async {
+    final idx = state.indexWhere((d) => d.id == device.id);
+    if (idx >= 0) {
+      state = [
+        for (int i = 0; i < state.length; i++)
+          if (i == idx) device else state[i],
+      ];
+    } else {
+      state = [device, ...state];
+    }
+    await _persist();
+  }
+
   Future<void> updateCachedState({
     required String id,
     String? name,
@@ -167,6 +182,8 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
+    String? rainmakerNodeId,
+    bool? isGoogleHomeLinked,
   }) async {
     var matched = false;
     state = [
@@ -190,6 +207,8 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
               transitionStyle: transitionStyle ?? d.transitionStyle,
               ambientStyle: ambientStyle ?? d.ambientStyle,
               ambientDepth: ambientDepth ?? d.ambientDepth,
+              rainmakerNodeId: rainmakerNodeId ?? d.rainmakerNodeId,
+              isGoogleHomeLinked: isGoogleHomeLinked ?? d.isGoogleHomeLinked,
             );
           })()
         ] else
@@ -557,6 +576,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               final depth = (json['depth'] as num?)?.toInt();
               final preset = (json['preset'] as num?)?.toInt();
               final segs = (json['segs'] as num?)?.toInt();
+              final rmakerNodeId = json['node_id'] as String?;
               _ref.read(lightControlProvider.notifier).updateFromHardware(
                     mode: m,
                     brightness: b,
@@ -572,6 +592,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     ambientDepth: depth,
                     activePreset: preset,
                     activeSegmentCount: segs,
+                    rainmakerNodeId: rmakerNodeId,
                   );
               _ref.read(pairedDevicesProvider.notifier).updateCachedState(
                     id: deviceId,
@@ -589,7 +610,24 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     transitionStyle: trans,
                     ambientStyle: amb,
                     ambientDepth: depth,
+                    rainmakerNodeId: rmakerNodeId,
                   );
+            } else if (type == 'rmaker_info') {
+              final nodeId = json['node_id'] as String?;
+              if (nodeId != null && nodeId.isNotEmpty) {
+                _ref.read(lightControlProvider.notifier).updateFromHardware(
+                      mode: _ref.read(lightControlProvider).mode,
+                      brightness: _ref.read(lightControlProvider).brightness,
+                      r: _ref.read(lightControlProvider).r,
+                      g: _ref.read(lightControlProvider).g,
+                      b: _ref.read(lightControlProvider).b,
+                      rainmakerNodeId: nodeId,
+                    );
+                _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+                      id: deviceId,
+                      rainmakerNodeId: nodeId,
+                    );
+              }
             } else if (type == 'ota_ack') {
               _ref.read(otaProgressProvider.notifier).handleOtaAck(json);
             } else if (type == 'time_synced') {
@@ -1101,6 +1139,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
     int? colorOrder,
     int? activePreset,
     int? activeSegmentCount,
+    String? rainmakerNodeId,
   }) {
     // If the user recently changed brightness/mode locally (within last 1500ms),
     // ignore stale incoming hardware echo to prevent slider jitter or jumping
@@ -1127,6 +1166,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
       transitionStyle: transitionStyle ?? state.transitionStyle,
       ambientStyle: ambientStyle ?? state.ambientStyle,
       ambientDepth: ambientDepth ?? state.ambientDepth,
+      rainmakerNodeId: rainmakerNodeId ?? state.rainmakerNodeId,
     );
     if (!isOn) {
       _ref.read(autoOffTimerProvider.notifier).onLightsSwitchedOff();
@@ -1149,6 +1189,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
       transitionStyle: dev.effectiveTransitionStyle,
       ambientStyle: dev.effectiveAmbientStyle,
       ambientDepth: dev.effectiveAmbientDepth,
+      rainmakerNodeId: dev.rainmakerNodeId,
     );
   }
 
@@ -2875,5 +2916,254 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
 
 final wifiProvider = StateNotifierProvider<WifiNotifier, WifiConnectionState>((ref) {
   return WifiNotifier(ref);
+});
+
+// ============================================================================
+// ESP RainMaker Cloud Authentication & Node Association
+// ============================================================================
+
+final rainmakerCloudServiceProvider = Provider<RainmakerCloudService>((ref) {
+  return const RainmakerCloudService();
+});
+
+class RainmakerAuthState {
+  const RainmakerAuthState({
+    this.isLoggedIn = false,
+    this.email,
+    this.userId,
+    this.accessToken,
+    this.refreshToken,
+    this.nodes = const [],
+    this.isLoading = false,
+    this.errorMessage,
+  });
+
+  final bool isLoggedIn;
+  final String? email;
+  final String? userId;
+  final String? accessToken;
+  final String? refreshToken;
+  final List<String> nodes;
+  final bool isLoading;
+  final String? errorMessage;
+
+  RainmakerAuthState copyWith({
+    bool? isLoggedIn,
+    String? email,
+    String? userId,
+    String? accessToken,
+    String? refreshToken,
+    List<String>? nodes,
+    bool? isLoading,
+    String? errorMessage,
+  }) =>
+      RainmakerAuthState(
+        isLoggedIn: isLoggedIn ?? this.isLoggedIn,
+        email: email ?? this.email,
+        userId: userId ?? this.userId,
+        accessToken: accessToken ?? this.accessToken,
+        refreshToken: refreshToken ?? this.refreshToken,
+        nodes: nodes ?? this.nodes,
+        isLoading: isLoading ?? this.isLoading,
+        errorMessage: errorMessage,
+      );
+}
+
+class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
+  RainmakerAuthNotifier(this._ref) : super(const RainmakerAuthState()) {
+    _loadFromKv();
+  }
+
+  final Ref _ref;
+
+  void _loadFromKv() {
+    final kv = _ref.read(kvStoreProvider);
+    final email = kv.getString(KvKeys.rainmakerEmail);
+    final token = kv.getString(KvKeys.rainmakerAccessToken);
+    final refresh = kv.getString(KvKeys.rainmakerRefreshToken);
+    final uid = kv.getString(KvKeys.rainmakerUserId);
+
+    if (email != null && token != null && token.isNotEmpty) {
+      state = RainmakerAuthState(
+        isLoggedIn: true,
+        email: email,
+        accessToken: token,
+        refreshToken: refresh,
+        userId: uid,
+      );
+      refreshNodes();
+    }
+  }
+
+  /// Initiates Google Sign-In with Espressif RainMaker using secure ASWebAuthenticationSession / CustomTabs.
+  Future<bool> loginWithGoogle() async {
+    state = state.copyWith(isLoading: true, errorMessage: null);
+    try {
+      final authUrl = RainmakerCloudService.getGoogleOAuthUrl().toString();
+      final result = await FlutterWebAuth2.authenticate(
+        url: authUrl,
+        callbackUrlScheme: 'rainmaker',
+      );
+
+      final uri = Uri.parse(result);
+      final code = uri.queryParameters['code'];
+      if (code == null || code.isEmpty) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'No authorization code returned from Google login.',
+        );
+        return false;
+      }
+
+      final service = _ref.read(rainmakerCloudServiceProvider);
+      final res = await service.exchangeOAuthCode(code);
+
+      if (res.isSuccess && res.accessToken != null) {
+        final kv = _ref.read(kvStoreProvider);
+        if (res.email != null) {
+          await kv.putString(KvKeys.rainmakerEmail, res.email!);
+        }
+        await kv.putString(KvKeys.rainmakerAccessToken, res.accessToken!);
+        if (res.refreshToken != null) {
+          await kv.putString(KvKeys.rainmakerRefreshToken, res.refreshToken!);
+        }
+        if (res.userId != null) {
+          await kv.putString(KvKeys.rainmakerUserId, res.userId!);
+        }
+
+        state = RainmakerAuthState(
+          isLoggedIn: true,
+          email: res.email,
+          accessToken: res.accessToken,
+          refreshToken: res.refreshToken,
+          userId: res.userId,
+          isLoading: false,
+        );
+
+        await refreshNodes();
+
+        // Zero-tap Auto-Binding: If an active light is connected with a known nodeId, bind it automatically!
+        final activeDev = _ref.read(activeDeviceProvider);
+        final light = _ref.read(lightControlProvider);
+        final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
+        if (targetNodeId != null && targetNodeId.isNotEmpty) {
+          await mapActiveDevice(nodeId: targetNodeId);
+        }
+
+        return true;
+      } else {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: res.errorMessage ?? 'Failed to complete Google authentication.',
+        );
+        return false;
+      }
+    } catch (e) {
+      _log.w('Google OAuth sign-in canceled or failed: $e');
+      final isCanceled = e.toString().toLowerCase().contains('cancel');
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: isCanceled ? null : 'Google sign-in was interrupted.',
+      );
+      return false;
+    }
+  }
+
+  Future<bool> login(String email, String password) async {
+    state = state.copyWith(isLoading: true, errorMessage: null);
+    final service = _ref.read(rainmakerCloudServiceProvider);
+    final res = await service.login(email: email, password: password);
+
+    if (res.isSuccess && res.accessToken != null) {
+      final kv = _ref.read(kvStoreProvider);
+      await kv.putString(KvKeys.rainmakerEmail, res.email ?? email);
+      await kv.putString(KvKeys.rainmakerAccessToken, res.accessToken!);
+      if (res.refreshToken != null) {
+        await kv.putString(KvKeys.rainmakerRefreshToken, res.refreshToken!);
+      }
+      if (res.userId != null) {
+        await kv.putString(KvKeys.rainmakerUserId, res.userId!);
+      }
+
+      state = RainmakerAuthState(
+        isLoggedIn: true,
+        email: res.email ?? email,
+        accessToken: res.accessToken,
+        refreshToken: res.refreshToken,
+        userId: res.userId,
+        isLoading: false,
+      );
+      await refreshNodes();
+
+      // Zero-tap Auto-Binding: Bind active device if known
+      final activeDev = _ref.read(activeDeviceProvider);
+      final light = _ref.read(lightControlProvider);
+      final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
+      if (targetNodeId != null && targetNodeId.isNotEmpty) {
+        await mapActiveDevice(nodeId: targetNodeId);
+      }
+
+      return true;
+    } else {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: res.errorMessage ?? 'Failed to authenticate with ESP RainMaker.',
+      );
+      return false;
+    }
+  }
+
+  Future<void> logout() async {
+    final kv = _ref.read(kvStoreProvider);
+    await kv.remove(KvKeys.rainmakerEmail);
+    await kv.remove(KvKeys.rainmakerAccessToken);
+    await kv.remove(KvKeys.rainmakerRefreshToken);
+    await kv.remove(KvKeys.rainmakerUserId);
+    state = const RainmakerAuthState();
+  }
+
+  Future<void> refreshNodes() async {
+    final token = state.accessToken;
+    if (token == null || token.isEmpty) return;
+    final service = _ref.read(rainmakerCloudServiceProvider);
+    final nodes = await service.getUserNodes(accessToken: token);
+    state = state.copyWith(nodes: nodes);
+  }
+
+  Future<bool> mapActiveDevice({required String nodeId, String? secretKey}) async {
+    final token = state.accessToken;
+    if (token == null || token.isEmpty) {
+      state = state.copyWith(errorMessage: 'Please log in to your Espressif account first.');
+      return false;
+    }
+    state = state.copyWith(isLoading: true, errorMessage: null);
+    final service = _ref.read(rainmakerCloudServiceProvider);
+    final success = await service.mapNodeToUser(
+      accessToken: token,
+      nodeId: nodeId,
+      secretKey: secretKey,
+    );
+
+    state = state.copyWith(isLoading: false);
+    if (success) {
+      await refreshNodes();
+      final activeDev = _ref.read(activeDeviceProvider);
+      if (activeDev != null) {
+        final updated = activeDev.copyWith(
+          isGoogleHomeLinked: true,
+          rainmakerNodeId: nodeId,
+        );
+        _ref.read(pairedDevicesProvider.notifier).upsertDevice(updated);
+      }
+      return true;
+    } else {
+      state = state.copyWith(errorMessage: 'Failed to link node $nodeId to your account.');
+      return false;
+    }
+  }
+}
+
+final rainmakerAuthProvider = StateNotifierProvider<RainmakerAuthNotifier, RainmakerAuthState>((ref) {
+  return RainmakerAuthNotifier(ref);
 });
 

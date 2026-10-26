@@ -35,11 +35,13 @@ class ScheduleScreen extends ConsumerWidget {
     final notifier = ref.read(schedulesProvider.notifier);
     final activeCount = schedules.where((s) => s.isEnabled).length;
 
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+    final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight + 8;
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 80;
+
+    return Stack(
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(20, topPadding, 20, bottomPadding),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -91,18 +93,22 @@ class ScheduleScreen extends ConsumerWidget {
             ],
           ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppTheme.amber,
-        foregroundColor: Colors.white,
-        elevation: 4,
-        icon: const Icon(Icons.add_alarm_rounded, size: 20, color: Colors.white),
-        label: Text(
-          'NEW ROUTINE',
-          style: AppTheme.heading(size: 13, color: Colors.white, letterSpacing: 1.2),
+        Positioned(
+          bottom: bottomPadding + 8,
+          right: 20,
+          child: FloatingActionButton.extended(
+            backgroundColor: AppTheme.amber,
+            foregroundColor: Colors.white,
+            elevation: 4,
+            icon: const Icon(Icons.add_alarm_rounded, size: 20, color: Colors.white),
+            label: Text(
+              'NEW ROUTINE',
+              style: AppTheme.heading(size: 13, color: Colors.white, letterSpacing: 1.2),
+            ),
+            onPressed: () => _openEditor(context),
+          ).animate().scale(delay: 200.ms, curve: Curves.easeOutBack),
         ),
-        onPressed: () => _openEditor(context),
-      ).animate().scale(delay: 200.ms, curve: Curves.easeOutBack),
+      ],
     );
   }
 

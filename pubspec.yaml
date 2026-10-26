@@ -28,6 +28,8 @@ dependencies:
   flutter_animate: ^4.5.0
   collection: ^1.19.0
   crypto: ^3.0.6
+  url_launcher: ^6.3.3
+  flutter_web_auth_2: ^5.1.0
 
 dev_dependencies:
   flutter_test:

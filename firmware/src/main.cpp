@@ -1324,6 +1324,13 @@ void notify_state() {
                  ",\"preset\":" + String(activePresetIndex) +
                  ",\"segs\":" + String(activeSegmentCount) +
                  ",\"cycle_mask\":" + String(cycleBitmask) + "}";
+
+    const char* nid = rainmakerManagerGetNodeId();
+    if (nid != nullptr && strlen(nid) > 0) {
+        pkt.remove(pkt.length() - 1);
+        pkt += ",\"node_id\":\"" + String(nid) + "\"}";
+    }
+
     pCharacteristic->setValue((uint8_t*)pkt.c_str(), pkt.length());
     pCharacteristic->notify();
 }
@@ -2183,6 +2190,7 @@ void handle_command(const String& json) {
             prefs.putString("dev_name", activeDeviceName);
             prefs.end();
             NimBLEDevice::setDeviceName(activeDeviceName);
+            rainmakerManagerUpdateDeviceName(activeDeviceName);
             notify_state();
             Serial.printf("[BLE] Device name updated to '%s'\n", activeDeviceName);
         }
@@ -2198,6 +2206,7 @@ void handle_command(const String& json) {
         }
         prefs.end();
         NimBLEDevice::setDeviceName(activeDeviceName);
+        rainmakerManagerUpdateDeviceName(activeDeviceName);
         notify_state();
         Serial.printf("[BLE] Device name reset to default '%s'\n", activeDeviceName);
         return;
@@ -2206,6 +2215,16 @@ void handle_command(const String& json) {
     if (cmd == "identify") {
         start_identify_animation();
         Serial.println("[BLE] Triggered Identify / Blink animation");
+        return;
+    }
+
+    if (cmd == "get_rmaker_info") {
+        const char* nid = rainmakerManagerGetNodeId();
+        String res = "{\"type\":\"rmaker_info\",\"node_id\":\"" + String(nid ? nid : "") +
+                     "\",\"running\":" + String(rainmakerManagerIsRunning() ? "true" : "false") +
+                     ",\"cloud_ok\":" + String(rainmakerManagerIsCloudConnected() ? "true" : "false") + "}";
+        pCharacteristic->setValue((uint8_t*)res.c_str(), res.length());
+        pCharacteristic->notify();
         return;
     }
 

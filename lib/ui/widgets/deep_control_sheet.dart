@@ -19,7 +19,7 @@ class DeepControlSheet extends ConsumerStatefulWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.65),
+      barrierColor: Colors.black.withValues(alpha: 0.38),
       builder: (ctx) => const DeepControlSheet(),
     );
   }
@@ -70,9 +70,16 @@ class _DeepControlSheetState extends ConsumerState<DeepControlSheet>
             maxHeight: MediaQuery.of(context).size.height * 0.88,
           ),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E1A16).withValues(alpha: 0.92),
+            color: AppTheme.surface.withValues(alpha: 0.95),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border.all(color: AppTheme.borderBright.withValues(alpha: 0.4)),
+            border: Border.all(color: AppTheme.border),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF3B2E1E).withValues(alpha: 0.08),
+                blurRadius: 24,
+                offset: const Offset(0, -6),
+              ),
+            ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -83,7 +90,7 @@ class _DeepControlSheetState extends ConsumerState<DeepControlSheet>
                 width: 38,
                 height: 4.5,
                 decoration: BoxDecoration(
-                  color: AppTheme.textMuted.withValues(alpha: 0.4),
+                  color: AppTheme.borderBright,
                   borderRadius: BorderRadius.circular(3),
                 ),
               ),

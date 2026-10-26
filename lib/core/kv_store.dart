@@ -47,4 +47,8 @@ class KvKeys {
   static const savedModes = 'saved_default_modes_v1';
   static const savedPresets = 'saved_light_presets_v1';
   static const savedRooms = 'saved_rooms_v1';
+  static const rainmakerEmail = 'rainmaker_email_v1';
+  static const rainmakerAccessToken = 'rainmaker_access_token_v1';
+  static const rainmakerRefreshToken = 'rainmaker_refresh_token_v1';
+  static const rainmakerUserId = 'rainmaker_user_id_v1';
 }

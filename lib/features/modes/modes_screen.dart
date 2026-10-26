@@ -375,34 +375,32 @@ class _ModesScreenState extends ConsumerState<ModesScreen> {
     final activePreset = _getPreset(_selectedPresetIndex, presets);
     final isCurrentActiveOnDevice = light.isOn && light.activePreset == activePreset.index;
 
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. Header Banner with Next Mode Cycle & Reset Action
-              _buildHeaderBanner(presets),
-              const SizedBox(height: 12),
+    final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight + 8;
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 80;
 
-              // 2. Horizontal Presets Chip Selector Bar (+ Add Preset button)
-              _buildPresetsSelectorBar(presets, totalLeds),
-              const SizedBox(height: 14),
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, topPadding, 20, bottomPadding),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. Header Banner with Next Mode Cycle & Reset Action
+          _buildHeaderBanner(presets),
+          const SizedBox(height: 12),
 
-              // 3. Active Preset Studio Card
-              Expanded(
-                child: SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  child: _buildPresetStudioCard(activePreset, isCurrentActiveOnDevice, totalLeds)
-                      .animate()
-                      .fadeIn(duration: 200.ms),
-                ),
-              ),
-            ],
+          // 2. Horizontal Presets Chip Selector Bar (+ Add Preset button)
+          _buildPresetsSelectorBar(presets, totalLeds),
+          const SizedBox(height: 14),
+
+          // 3. Active Preset Studio Card
+          Expanded(
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: _buildPresetStudioCard(activePreset, isCurrentActiveOnDevice, totalLeds)
+                  .animate()
+                  .fadeIn(duration: 200.ms),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
