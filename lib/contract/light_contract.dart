@@ -79,6 +79,9 @@ class LightPacketEncoder {
   static Uint8List encodeFastBrightness(int val) =>
       Uint8List.fromList([0x42, val.clamp(0, 255)]);
 
+  static Uint8List encodeFastRgb(int r, int g, int b) =>
+      Uint8List.fromList([0x43, r.clamp(0, 255), g.clamp(0, 255), b.clamp(0, 255)]);
+
   static Uint8List encodeSetRgb(int r, int g, int b) =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'set_rgb', 'r': r, 'g': g, 'b': b})));
 
@@ -227,11 +230,19 @@ class LightPacketEncoder {
   static Uint8List encodeSetHwConfig({
     required int leds,
     required int maxCurrentMa,
+    int colorOrder = 0,
   }) =>
       Uint8List.fromList(utf8.encode(jsonEncode({
         'cmd': 'set_hw_config',
         'leds': leds,
         'max_ma': maxCurrentMa,
+        'color_order': colorOrder,
+      })));
+
+  static Uint8List encodeSetColorOrder(int order) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'set_color_order',
+        'order': order,
       })));
 
   static Uint8List encodeSetAnimConfig({
@@ -241,6 +252,18 @@ class LightPacketEncoder {
   }) =>
       Uint8List.fromList(utf8.encode(jsonEncode({
         'cmd': 'set_anim_config',
+        'trans': transitionStyle,
+        'ambient': ambientStyle,
+        'depth': depth,
+      })));
+
+  static Uint8List encodeAnimPreview({
+    required int transitionStyle,
+    required int ambientStyle,
+    int depth = 6,
+  }) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'anim_preview',
         'trans': transitionStyle,
         'ambient': ambientStyle,
         'depth': depth,

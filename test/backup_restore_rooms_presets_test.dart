@@ -332,6 +332,70 @@ void main() {
       expect(p4Restored.transitionStyle, 4);
       expect(p4Restored.ambientStyle, 2);
     });
+
+    test('PairedDevice backward compatibility: handles Google Home and RainMaker metadata', () async {
+      final devWithGh = PairedDevice(
+        id: '11:22:33:44:55:66',
+        name: 'Temple Lights',
+        lastSeen: DateTime(2026, 10, 26),
+        isGoogleHomeLinked: true,
+        rainmakerNodeId: 'node_abc123',
+      );
+
+      final jsonMap = devWithGh.toJson();
+      expect(jsonMap['isGoogleHomeLinked'], true);
+      expect(jsonMap['rainmakerNodeId'], 'node_abc123');
+
+      // Restoring modern device
+      final restoredModern = PairedDevice.fromJson(jsonMap);
+      expect(restoredModern.isGoogleHomeLinked, true);
+      expect(restoredModern.rainmakerNodeId, 'node_abc123');
+
+      // Restoring legacy device without these keys
+      final legacyJson = {
+        'id': '99:88:77:66:55:44',
+        'name': 'Legacy Temple Lights',
+        'lastSeen': '2026-01-01T00:00:00.000',
+      };
+      final restoredLegacy = PairedDevice.fromJson(legacyJson);
+      expect(restoredLegacy.id, '99:88:77:66:55:44');
+      expect(restoredLegacy.name, 'Legacy Temple Lights');
+      expect(restoredLegacy.isGoogleHomeLinked, isNull);
+      expect(restoredLegacy.rainmakerNodeId, isNull);
+    });
+
+    test('PairedDevice resilience: handles double/num values, missing id, and empty objects without crashing', () async {
+      final trickyJson = {
+        'id': null,
+        'name': 'Tricky Light',
+        'cachedBrightness': 128.0,
+        'cachedMode': 2.0,
+        'cachedR': 255.0,
+        'cachedG': 147.0,
+        'cachedB': 41.0,
+        'ledCount': 180.0,
+        'maxCurrentMa': 3500.0,
+        'colorOrder': 1.0,
+        'transitionStyle': 3.0,
+        'ambientStyle': 2.0,
+        'ambientDepth': 8.0,
+      };
+
+      final restored = PairedDevice.fromJson(trickyJson);
+      expect(restored.id, 'unknown_device');
+      expect(restored.name, 'Tricky Light');
+      expect(restored.cachedBrightness, 128);
+      expect(restored.cachedMode, 2);
+      expect(restored.cachedR, 255);
+      expect(restored.cachedG, 147);
+      expect(restored.cachedB, 41);
+      expect(restored.ledCount, 180);
+      expect(restored.maxCurrentMa, 3500);
+      expect(restored.colorOrder, 1);
+      expect(restored.transitionStyle, 3);
+      expect(restored.ambientStyle, 2);
+      expect(restored.ambientDepth, 8);
+    });
   });
 }
 

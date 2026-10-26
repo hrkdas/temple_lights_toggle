@@ -14,6 +14,7 @@ import '../../ui/widgets/radar_sweep.dart';
 import '../../ui/widgets/split_tile_card.dart';
 import '../../ui/widgets/strip_visualizer_widget.dart';
 import '../scanner/device_sheet.dart';
+import '../settings/hardware_setup_sheet.dart';
 
 /// Main screen featuring BLE auto-connect telemetry, mode controls, brightness slider, and RGB picker.
 class LightsScreen extends ConsumerWidget {
@@ -481,7 +482,7 @@ class LightsScreen extends ConsumerWidget {
             // Dedicated Kelvin Warmth Slider (2000K to 6500K)
             KelvinWarmthSlider(
               initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
-              onChanged: (k, r, g, b) => ctrl.setRgb(r, g, b),
+              onChanged: (k, r, g, b) => ctrl.setLiveRgb(r, g, b),
               onChangeEnd: (k, r, g, b) => ctrl.setRgb(r, g, b),
             ),
 
@@ -497,11 +498,9 @@ class LightsScreen extends ConsumerWidget {
 
             const SizedBox(height: 14),
 
-            // Custom RGB Color Palette (shown when Mode 3 is active or for direct pick)
-            if (light.mode == 3) ...[
-              _buildRgbPaletteCard(light, ctrl),
-              const SizedBox(height: 14),
-            ],
+            // Custom RGB Color Palette (always accessible)
+            _buildRgbPaletteCard(context, light, ctrl),
+            const SizedBox(height: 14),
 
             // Quick Auto-Off Timer
             const AutoOffTimerWidget(),
@@ -849,12 +848,6 @@ class LightsScreen extends ConsumerWidget {
         onTap: () async {
           if (m.containsKey('preset')) {
             final p = m['preset'] as LightPreset;
-            await ctrl.setSegments(p.segments);
-            await ctrl.setAnimConfig(
-              transitionStyle: p.transitionStyle,
-              ambientStyle: p.ambientStyle,
-              ambientDepth: p.ambientDepth,
-            );
             await ctrl.setPreset(p.index);
           } else {
             await ctrl.setMode(modeIdx);
@@ -1117,7 +1110,7 @@ class LightsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildRgbPaletteCard(LightState light, LightControlNotifier ctrl) {
+  Widget _buildRgbPaletteCard(BuildContext context, LightState light, LightControlNotifier ctrl) {
     const palette = [
       {'name': 'Warm Amber', 'r': 255, 'g': 147, 'b': 41},
       {'name': 'Saffron Gold', 'r': 255, 'g': 180, 'b': 0},
@@ -1159,20 +1152,66 @@ class LightsScreen extends ConsumerWidget {
                   ),
                 ],
               ),
-              Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color.fromARGB(255, light.r, light.g, light.b),
-                  border: Border.all(color: Colors.white, width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color.fromARGB(255, light.r, light.g, light.b).withValues(alpha: 0.6),
-                      blurRadius: 6,
+              Row(
+                children: [
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => HardwareSetupSheet.show(context),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amber.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.tune_rounded, size: 12, color: AppTheme.amber),
+                          const SizedBox(width: 4),
+                          Text('Calibrate', style: AppTheme.heading(size: 10.5, color: AppTheme.amber)),
+                        ],
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => _showCustomColorDialog(context, light, ctrl),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppTheme.cyan.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppTheme.cyan.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.colorize_rounded, size: 12, color: AppTheme.cyan),
+                          const SizedBox(width: 4),
+                          Text('Sliders', style: AppTheme.heading(size: 10.5, color: AppTheme.cyan)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 18,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color.fromARGB(255, light.r, light.g, light.b),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color.fromARGB(255, light.r, light.g, light.b).withValues(alpha: 0.6),
+                          blurRadius: 6,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1180,62 +1219,227 @@ class LightsScreen extends ConsumerWidget {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: palette.map((colorItem) {
-              final r = colorItem['r'] as int;
-              final g = colorItem['g'] as int;
-              final b = colorItem['b'] as int;
-              final color = Color.fromARGB(255, r, g, b);
-              final isSelected = light.r == r && light.g == g && light.b == b;
+            children: [
+              ...palette.map((colorItem) {
+                final r = colorItem['r'] as int;
+                final g = colorItem['g'] as int;
+                final b = colorItem['b'] as int;
+                final color = Color.fromARGB(255, r, g, b);
+                final isSelected = light.r == r && light.g == g && light.b == b;
 
-              return InkWell(
+                return InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => ctrl.setRgb(r, g, b),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceRaised,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isSelected ? color : AppTheme.border,
+                        width: isSelected ? 2.0 : 1.0,
+                      ),
+                      boxShadow: isSelected
+                          ? [
+                              BoxShadow(
+                                color: color.withValues(alpha: 0.4),
+                                blurRadius: 8,
+                              ),
+                            ]
+                          : null,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: color,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          colorItem['name'] as String,
+                          style: AppTheme.body(
+                            size: 11,
+                            color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
+                            weight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              InkWell(
                 borderRadius: BorderRadius.circular(10),
-                onTap: () => ctrl.setRgb(r, g, b),
+                onTap: () => _showCustomColorDialog(context, light, ctrl),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
                     color: AppTheme.surfaceRaised,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: isSelected ? color : AppTheme.border,
-                      width: isSelected ? 2.0 : 1.0,
+                      color: AppTheme.cyan.withValues(alpha: 0.5),
+                      width: 1.0,
                     ),
-                    boxShadow: isSelected
-                        ? [
-                            BoxShadow(
-                              color: color.withValues(alpha: 0.4),
-                              blurRadius: 8,
-                            ),
-                          ]
-                        : null,
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: color,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
+                      const Icon(Icons.add_rounded, size: 14, color: AppTheme.cyan),
+                      const SizedBox(width: 4),
                       Text(
-                        colorItem['name'] as String,
+                        'Custom RGB',
                         style: AppTheme.body(
                           size: 11,
-                          color: isSelected ? AppTheme.textPrimary : AppTheme.textSecondary,
-                          weight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                          color: AppTheme.cyan,
+                          weight: FontWeight.w600,
                         ),
                       ),
                     ],
                   ),
                 ),
-              );
-            }).toList(),
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  void _showCustomColorDialog(BuildContext context, LightState light, LightControlNotifier ctrl) {
+    int curR = light.r;
+    int curG = light.g;
+    int curB = light.b;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            final currentColor = Color.fromARGB(255, curR, curG, curB);
+
+            Widget buildColorSlider({
+              required String label,
+              required int value,
+              required Color activeColor,
+              required ValueChanged<int> onChanged,
+            }) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(label, style: AppTheme.heading(size: 12, color: activeColor)),
+                      Text('$value', style: AppTheme.mono(size: 12, color: AppTheme.textSecondary)),
+                    ],
+                  ),
+                  SliderTheme(
+                    data: SliderTheme.of(dialogCtx).copyWith(
+                      activeTrackColor: activeColor,
+                      inactiveTrackColor: AppTheme.surfaceRaised,
+                      thumbColor: activeColor,
+                      trackHeight: 4,
+                    ),
+                    child: Slider(
+                      value: value.toDouble(),
+                      min: 0,
+                      max: 255,
+                      onChanged: (v) {
+                        final rounded = v.round();
+                        setDialogState(() => onChanged(rounded));
+                        ctrl.setLiveRgb(curR, curG, curB);
+                      },
+                      onChangeEnd: (v) {
+                        ctrl.setRgb(curR, curG, curB);
+                      },
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return AlertDialog(
+              backgroundColor: AppTheme.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: currentColor,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(color: currentColor.withValues(alpha: 0.6), blurRadius: 8),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('Custom RGB Color', style: AppTheme.heading(size: 16)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    height: 48,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: currentColor,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.borderBright),
+                      boxShadow: [
+                        BoxShadow(color: currentColor.withValues(alpha: 0.35), blurRadius: 10),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        'RGB($curR, $curG, $curB)',
+                        style: TextStyle(
+                          color: (curR * 0.299 + curG * 0.587 + curB * 0.114) > 160 ? Colors.black : Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  buildColorSlider(
+                    label: 'RED',
+                    value: curR,
+                    activeColor: Colors.redAccent,
+                    onChanged: (v) => curR = v,
+                  ),
+                  buildColorSlider(
+                    label: 'GREEN',
+                    value: curG,
+                    activeColor: Colors.greenAccent,
+                    onChanged: (v) => curR = v,
+                  ),
+                  buildColorSlider(
+                    label: 'BLUE',
+                    value: curB,
+                    activeColor: Colors.lightBlueAccent,
+                    onChanged: (v) => curB = v,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text('Done', style: AppTheme.heading(size: 13, color: AppTheme.amber)),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../contract/light_contract.dart';
+import '../../core/haptics.dart';
 import '../../core/log.dart';
 import '../../domain/providers.dart';
 import '../../ui/theme.dart';
@@ -104,6 +105,129 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showGoogleHomeGuide(BuildContext context) {
+    AppHaptics.light();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.borderBright,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cyan.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.home_outlined, size: 24, color: AppTheme.cyan),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Google Home Setup', style: AppTheme.heading(size: 18)),
+                      const SizedBox(height: 2),
+                      Text('Control via Google Assistant & Google Home App', style: AppTheme.body(size: 12, color: AppTheme.textSecondary)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            _buildGuideStep(
+              step: '1',
+              title: 'Connect Wi-Fi to your ESP32',
+              desc: 'Open the Wi-Fi setup sheet in Temple Lights and connect the light to your 2.4 GHz home Wi-Fi network.',
+            ),
+            const SizedBox(height: 14),
+            _buildGuideStep(
+              step: '2',
+              title: 'Open Google Home App',
+              desc: 'On your phone, open the Google Home app, tap the "+" button, then select "Works with Google".',
+            ),
+            const SizedBox(height: 14),
+            _buildGuideStep(
+              step: '3',
+              title: 'Link "ESP RainMaker"',
+              desc: 'Search for "ESP RainMaker", log in with your account, and tap Authorize. Your Temple Lights will appear automatically!',
+            ),
+            const SizedBox(height: 14),
+            _buildGuideStep(
+              step: '4',
+              title: 'Enjoy Voice & App Control',
+              desc: 'Say "Hey Google, turn on Temple Lights" or "Hey Google, set brightness to 40%". Both Google Home and this app stay synchronized.',
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.cyan,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: Text('Done', style: AppTheme.heading(size: 14, color: Colors.black)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGuideStep({required String step, required String title, required String desc}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(
+            color: AppTheme.cyan,
+            shape: BoxShape.circle,
+          ),
+          child: Text(step, style: AppTheme.heading(size: 12, color: Colors.black)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: AppTheme.heading(size: 14)),
+              const SizedBox(height: 2),
+              Text(desc, style: AppTheme.body(size: 12, color: AppTheme.textSecondary)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -629,6 +753,70 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                             Navigator.of(context).pop();
                             AnimationPickerSheet.show(context);
                           },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Google Home & Voice Assistant Card
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceRaised,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.cyan.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.home_outlined, size: 20, color: AppTheme.cyan),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Google Home & Voice Assistant', style: AppTheme.heading(size: 15)),
+                                const SizedBox(height: 2),
+                                Consumer(
+                                  builder: (context, ref, _) {
+                                    final activeDev = ref.watch(activeDeviceProvider);
+                                    final isLinked = activeDev?.isGoogleHomeLinked ?? false;
+                                    return Text(
+                                      isLinked ? 'Status: Linked with Google Home' : 'Free Cloud Integration via ESP RainMaker',
+                                      style: AppTheme.mono(size: 11, color: isLinked ? AppTheme.green : AppTheme.textSecondary),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.assistant_rounded, size: 18, color: Colors.white),
+                          label: Text('Google Home Setup Guide', style: AppTheme.heading(size: 13, color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.cyan,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 1,
+                          ),
+                          onPressed: () => _showGoogleHomeGuide(context),
                         ),
                       ),
                     ],

@@ -6,6 +6,7 @@ import '../../domain/models.dart';
 import '../../domain/providers.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/strip_visualizer_widget.dart';
+import '../../ui/widgets/live_animation_preview_widget.dart';
 
 /// Dynamic Presets & Multi-Segment Studio Screen.
 /// Supports arbitrary LED range selection (e.g. 1-6, 100-105), living auras,
@@ -349,13 +350,16 @@ class _ModesScreenState extends ConsumerState<ModesScreen> {
   Future<void> _previewPreset(LightPreset preset) async {
     await AppHaptics.light();
     final ctrl = ref.read(lightControlProvider.notifier);
-    await ctrl.setSegments(preset.segments);
-    await ctrl.setAnimConfig(
+    if (preset.segments.isNotEmpty && preset.index >= 3) {
+      await ctrl.setSegments(preset.segments);
+    } else {
+      await ctrl.setPreset(preset.index);
+    }
+    await ctrl.previewAnimation(
       transitionStyle: preset.transitionStyle,
       ambientStyle: preset.ambientStyle,
-      ambientDepth: 6,
+      depth: preset.ambientDepth,
     );
-    await ctrl.setPreset(preset.index);
   }
 
   @override
@@ -751,6 +755,20 @@ class _ModesScreenState extends ConsumerState<ModesScreen> {
                 },
               ),
             ),
+          const SizedBox(height: 14),
+
+          // Live Interactive Animation Preview & Audition for Preset
+          LiveAnimationPreviewWidget(
+            transitionStyle: preset.transitionStyle,
+            ambientStyle: preset.ambientStyle,
+            ambientDepth: preset.ambientDepth,
+            r: preset.r,
+            g: preset.g,
+            b: preset.b,
+            brightness: preset.brightness,
+            onAudition: () => _previewPreset(preset),
+          ),
+
           const SizedBox(height: 14),
 
           // Devotional Transition Style & Living Aura Selectors

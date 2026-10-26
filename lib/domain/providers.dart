@@ -163,6 +163,7 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     String? firmwareVersion,
     int? ledCount,
     int? maxCurrentMa,
+    int? colorOrder,
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
@@ -185,6 +186,7 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
               cachedB: b ?? d.cachedB,
               ledCount: ledCount ?? d.ledCount,
               maxCurrentMa: maxCurrentMa ?? d.maxCurrentMa,
+              colorOrder: colorOrder ?? d.colorOrder,
               transitionStyle: transitionStyle ?? d.transitionStyle,
               ambientStyle: ambientStyle ?? d.ambientStyle,
               ambientDepth: ambientDepth ?? d.ambientDepth,
@@ -549,6 +551,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               final hwName = json['name'] as String?;
               final leds = (json['leds'] as num?)?.toInt();
               final maxMa = (json['max_ma'] as num?)?.toInt();
+              final colorOrd = (json['color_order'] as num?)?.toInt();
               final trans = (json['trans'] as num?)?.toInt();
               final amb = (json['amb'] as num?)?.toInt();
               final depth = (json['depth'] as num?)?.toInt();
@@ -563,6 +566,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     firmwareVersion: ver,
                     ledCount: leds,
                     maxCurrentMa: maxMa,
+                    colorOrder: colorOrd,
                     transitionStyle: trans,
                     ambientStyle: amb,
                     ambientDepth: depth,
@@ -581,6 +585,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     firmwareVersion: ver,
                     ledCount: leds,
                     maxCurrentMa: maxMa,
+                    colorOrder: colorOrd,
                     transitionStyle: trans,
                     ambientStyle: amb,
                     ambientDepth: depth,
@@ -826,8 +831,68 @@ class LightControlNotifier extends StateNotifier<LightState> {
   int? _pendingBrightness;
   bool _sendInFlight = false;
 
+  ({int r, int g, int b})? _pendingRgb;
+  Timer? _rgbThrottleTimer;
+  bool _rgbSendInFlight = false;
+
   void startBrightnessDrag() {
     _lastLocalInteraction = DateTime.now();
+  }
+
+  void startRgbDrag() {
+    _lastLocalInteraction = DateTime.now();
+  }
+
+  /// High-rate live color / warmth slider handler:
+  /// Updates local state instantly at full screen refresh rate with zero latency.
+  /// Throttles BLE radio packets to ~24ms intervals using the fast 4-byte binary packet [0x43, R, G, B].
+  void setLiveRgb(int r, int g, int b) {
+    final cr = r.clamp(0, 255);
+    final cg = g.clamp(0, 255);
+    final cb = b.clamp(0, 255);
+    _lastLocalInteraction = DateTime.now();
+    final nextBright = state.brightness == 0 ? 255 : state.brightness;
+
+    // 1. Update UI state immediately (instant tactile response)
+    state = state.copyWith(
+      r: cr,
+      g: cg,
+      b: cb,
+      mode: 3,
+      segments: const [],
+      isOn: true,
+      brightness: nextBright,
+      lastToggled: _lastLocalInteraction,
+    );
+
+    // 2. Queue and throttle BLE transmission
+    _pendingRgb = (r: cr, g: cg, b: cb);
+    _scheduleFastRgbSend();
+  }
+
+  void _scheduleFastRgbSend() {
+    if (_rgbThrottleTimer != null && _rgbThrottleTimer!.isActive) return;
+    if (_rgbSendInFlight) return;
+
+    final targetVal = _pendingRgb;
+    if (targetVal == null) return;
+    _pendingRgb = null;
+    _rgbSendInFlight = true;
+
+    _dispatchFast(LightPacketEncoder.encodeFastRgb(targetVal.r, targetVal.g, targetVal.b)).whenComplete(() {
+      _rgbSendInFlight = false;
+      if (_pendingRgb != null) {
+        _rgbThrottleTimer = Timer(const Duration(milliseconds: 24), () {
+          _scheduleFastRgbSend();
+        });
+      }
+    });
+
+    _rgbThrottleTimer = Timer(const Duration(milliseconds: 24), () {
+      if (_pendingRgb != null) {
+        _scheduleFastRgbSend();
+      }
+    });
   }
 
   /// High-rate live slider handler:
@@ -987,11 +1052,16 @@ class LightControlNotifier extends StateNotifier<LightState> {
   /// Set custom RGB color (auto-switches to mode 3)
   Future<void> setRgb(int r, int g, int b) async {
     _lastLocalInteraction = DateTime.now();
+    _pendingRgb = null;
+    _rgbThrottleTimer?.cancel();
+    final cr = r.clamp(0, 255);
+    final cg = g.clamp(0, 255);
+    final cb = b.clamp(0, 255);
     final nextBright = state.brightness == 0 ? 255 : state.brightness;
     state = state.copyWith(
-      r: r.clamp(0, 255),
-      g: g.clamp(0, 255),
-      b: b.clamp(0, 255),
+      r: cr,
+      g: cg,
+      b: cb,
       mode: 3,
       segments: const [],
       isOn: true,
@@ -999,7 +1069,8 @@ class LightControlNotifier extends StateNotifier<LightState> {
       lastToggled: DateTime.now(),
     );
     await AppHaptics.tap();
-    await _dispatchPacket(LightPacketEncoder.encodeSetRgb(r, g, b));
+    await _dispatchFast(LightPacketEncoder.encodeFastRgb(cr, cg, cb));
+    await _dispatchPacket(LightPacketEncoder.encodeSetRgb(cr, cg, cb));
   }
 
   Future<void> setCustomRgb(int r, int g, int b) => setRgb(r, g, b);
@@ -1027,6 +1098,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
+    int? colorOrder,
     int? activePreset,
     int? activeSegmentCount,
   }) {
@@ -1051,6 +1123,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
       firmwareVersion: firmwareVersion ?? state.firmwareVersion,
       ledCount: ledCount ?? state.ledCount,
       maxCurrentMa: maxCurrentMa ?? state.maxCurrentMa,
+      colorOrder: colorOrder ?? state.colorOrder,
       transitionStyle: transitionStyle ?? state.transitionStyle,
       ambientStyle: ambientStyle ?? state.ambientStyle,
       ambientDepth: ambientDepth ?? state.ambientDepth,
@@ -1058,7 +1131,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
     if (!isOn) {
       _ref.read(autoOffTimerProvider.notifier).onLightsSwitchedOff();
     }
-    _log.i('Lights state updated from hardware: mode=$mode, bright=$brightness, leds=${ledCount ?? state.ledCount}, trans=${transitionStyle ?? state.transitionStyle}, amb=${ambientStyle ?? state.ambientStyle}');
+    _log.i('Lights state updated from hardware: mode=$mode, bright=$brightness, leds=${ledCount ?? state.ledCount}, colorOrder=${colorOrder ?? state.colorOrder}, trans=${transitionStyle ?? state.transitionStyle}, amb=${ambientStyle ?? state.ambientStyle}');
   }
 
   void hydrateFromCached(PairedDevice dev) {
@@ -1072,29 +1145,51 @@ class LightControlNotifier extends StateNotifier<LightState> {
       firmwareVersion: dev.firmwareVersion,
       ledCount: dev.effectiveLedCount,
       maxCurrentMa: dev.effectiveMaxCurrentMa,
+      colorOrder: dev.effectiveColorOrder,
       transitionStyle: dev.effectiveTransitionStyle,
       ambientStyle: dev.effectiveAmbientStyle,
       ambientDepth: dev.effectiveAmbientDepth,
     );
   }
 
-  Future<void> setHardwareConfig({required int leds, required int maxCurrentMa}) async {
+  Future<void> setHardwareConfig({required int leds, required int maxCurrentMa, int? colorOrder}) async {
     final client = _ref.read(bleClientProvider);
-    state = state.copyWith(ledCount: leds, maxCurrentMa: maxCurrentMa);
+    final order = colorOrder ?? state.colorOrder;
+    state = state.copyWith(ledCount: leds, maxCurrentMa: maxCurrentMa, colorOrder: order);
     if (client.deviceId != null) {
       await _ref.read(pairedDevicesProvider.notifier).updateCachedState(
             id: client.deviceId!,
             ledCount: leds,
             maxCurrentMa: maxCurrentMa,
+            colorOrder: order,
           );
     }
     if (!client.isConnected) return;
-    final pkt = LightPacketEncoder.encodeSetHwConfig(leds: leds, maxCurrentMa: maxCurrentMa);
+    final pkt = LightPacketEncoder.encodeSetHwConfig(leds: leds, maxCurrentMa: maxCurrentMa, colorOrder: order);
     try {
       await _dispatchPacket(pkt);
-      _log.i('Dispatched set_hw_config leds=$leds max_ma=$maxCurrentMa to ESP32');
+      _log.i('Dispatched set_hw_config leds=$leds max_ma=$maxCurrentMa color_order=$order to ESP32');
     } catch (e) {
       _log.w('Failed to dispatch set_hw_config: $e');
+    }
+  }
+
+  Future<void> setColorOrder(int order) async {
+    final client = _ref.read(bleClientProvider);
+    state = state.copyWith(colorOrder: order);
+    if (client.deviceId != null) {
+      await _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+            id: client.deviceId!,
+            colorOrder: order,
+          );
+    }
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeSetColorOrder(order);
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched set_color_order order=$order to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch set_color_order: $e');
     }
   }
 
@@ -1200,6 +1295,30 @@ class LightControlNotifier extends StateNotifier<LightState> {
     }
   }
 
+  Future<void> previewAnimation({
+    required int transitionStyle,
+    required int ambientStyle,
+    int depth = 6,
+  }) async {
+    state = state.copyWith(
+      transitionStyle: transitionStyle,
+      ambientStyle: ambientStyle,
+      ambientDepth: depth,
+    );
+    if (!_client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeAnimPreview(
+      transitionStyle: transitionStyle,
+      ambientStyle: ambientStyle,
+      depth: depth,
+    );
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched anim_preview trans=$transitionStyle amb=$ambientStyle depth=$depth to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch anim_preview: $e');
+    }
+  }
+
   Future<void> _dispatchFast(Uint8List packet) async {
     if (!_client.isConnected) return;
     final settings = _ref.read(settingsProvider);
@@ -1221,19 +1340,11 @@ class LightControlNotifier extends StateNotifier<LightState> {
     }
     final settings = _ref.read(settingsProvider);
     try {
-      if (packet.length <= 20) {
-        await _client.writeWithoutResponse(
-          packet,
-          serviceUuid: settings.customServiceUuid,
-          charUuid: settings.customCharUuid,
-        );
-      } else {
-        await _client.writeWithResponse(
-          packet,
-          serviceUuid: settings.customServiceUuid,
-          charUuid: settings.customCharUuid,
-        );
-      }
+      await _client.writeWithoutResponse(
+        packet,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
     } catch (e) {
       _log.e('Failed to send BLE packet: $e');
     }
@@ -1242,6 +1353,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
   @override
   void dispose() {
     _throttleTimer?.cancel();
+    _rgbThrottleTimer?.cancel();
     super.dispose();
   }
 }

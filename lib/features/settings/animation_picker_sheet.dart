@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/providers.dart';
 import '../../ui/theme.dart';
+import '../../ui/widgets/live_animation_preview_widget.dart';
 
 /// Modal bottom sheet to select devotional animation transitions and ambient aura styles.
 class AnimationPickerSheet extends ConsumerStatefulWidget {
@@ -110,15 +111,16 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
   Widget build(BuildContext context) {
     final activeDev = ref.watch(activeDeviceProvider);
     final targetName = activeDev?.displayName ?? 'Active Light';
+    final light = ref.watch(lightControlProvider);
 
     return Padding(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
       ),
       child: DraggableScrollableSheet(
-        initialChildSize: 0.85,
+        initialChildSize: 0.90,
         minChildSize: 0.50,
-        maxChildSize: 0.95,
+        maxChildSize: 0.96,
         expand: false,
         builder: (context, scrollController) {
           return Container(
@@ -164,7 +166,20 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
+
+                // Live Interactive Animation Preview & Physical Audition
+                LiveAnimationPreviewWidget(
+                  transitionStyle: _transitionStyle,
+                  ambientStyle: _ambientStyle,
+                  ambientDepth: _ambientDepth,
+                  r: light.r,
+                  g: light.g,
+                  b: light.b,
+                  brightness: light.brightness == 0 ? 255 : light.brightness,
+                ),
+
+                const SizedBox(height: 22),
 
                 // Section 1: Power ON/OFF & Mode Transitions
                 Text('Power ON/OFF & Switch Transitions', style: AppTheme.heading(size: 14, color: AppTheme.amber)),
@@ -199,8 +214,40 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
                   activeColor: AppTheme.amber,
                   onTap: () => setState(() => _transitionStyle = 2),
                 ),
+                _buildOptionTile(
+                  title: 'Sunset Cascade (Reverse Sweep)',
+                  description: 'Smooth wave cascading from the far altar border back to the origin.',
+                  icon: Icons.west_rounded,
+                  isSelected: _transitionStyle == 3,
+                  activeColor: AppTheme.amber,
+                  onTap: () => setState(() => _transitionStyle = 3),
+                ),
+                _buildOptionTile(
+                  title: 'Dual Convergence (Ends to Center)',
+                  description: 'Dual rays meet from both outer borders at the sanctum center.',
+                  icon: Icons.compress_rounded,
+                  isSelected: _transitionStyle == 4,
+                  activeColor: AppTheme.amber,
+                  onTap: () => setState(() => _transitionStyle = 4),
+                ),
+                _buildOptionTile(
+                  title: 'Sparkle Ignition (Sacred Starlight)',
+                  description: 'LEDs ignite in pseudo-random celestial order like temple starlight.',
+                  icon: Icons.auto_awesome_rounded,
+                  isSelected: _transitionStyle == 5,
+                  activeColor: AppTheme.amber,
+                  onTap: () => setState(() => _transitionStyle = 5),
+                ),
+                _buildOptionTile(
+                  title: 'Segment Domino (Stepped Cascade)',
+                  description: 'Architectural sections ignite in distinct sequential blocks.',
+                  icon: Icons.view_column_rounded,
+                  isSelected: _transitionStyle == 6,
+                  activeColor: AppTheme.amber,
+                  onTap: () => setState(() => _transitionStyle = 6),
+                ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 22),
 
                 // Section 2: Living Ambient Aura
                 Text('Living Ambient Aura (When ON)', style: AppTheme.heading(size: 14, color: AppTheme.cyan)),
@@ -211,6 +258,14 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
                 ),
                 const SizedBox(height: 12),
 
+                _buildOptionTile(
+                  title: 'Pure Solid Radiance',
+                  description: 'Completely still, undisturbed illumination with zero motion.',
+                  icon: Icons.wb_sunny_rounded,
+                  isSelected: _ambientStyle == 0,
+                  activeColor: AppTheme.cyan,
+                  onTap: () => setState(() => _ambientStyle = 0),
+                ),
                 _buildOptionTile(
                   title: 'Gentle Breathing',
                   description: 'Slow, peaceful sinusoidal oscillation at a calm 3-second cycle.',
@@ -228,12 +283,36 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
                   onTap: () => setState(() => _ambientStyle = 2),
                 ),
                 _buildOptionTile(
-                  title: 'Pure Solid Radiance',
-                  description: 'Completely still, undisturbed illumination with zero motion.',
-                  icon: Icons.wb_sunny_rounded,
-                  isSelected: _ambientStyle == 0,
+                  title: 'Starlight Twinkle',
+                  description: 'Delicate high-frequency shimmer like celestial constellations.',
+                  icon: Icons.flare_rounded,
+                  isSelected: _ambientStyle == 3,
                   activeColor: AppTheme.cyan,
-                  onTap: () => setState(() => _ambientStyle = 0),
+                  onTap: () => setState(() => _ambientStyle = 3),
+                ),
+                _buildOptionTile(
+                  title: 'Sacred Amber Embers',
+                  description: 'Harmonic dual-wave breathing reminiscent of sacred temple embers.',
+                  icon: Icons.whatshot_rounded,
+                  isSelected: _ambientStyle == 4,
+                  activeColor: AppTheme.cyan,
+                  onTap: () => setState(() => _ambientStyle = 4),
+                ),
+                _buildOptionTile(
+                  title: 'Aurora Flow',
+                  description: 'Slow undulating luminous waves traveling gently along the shrine.',
+                  icon: Icons.waves_rounded,
+                  isSelected: _ambientStyle == 5,
+                  activeColor: AppTheme.cyan,
+                  onTap: () => setState(() => _ambientStyle = 5),
+                ),
+                _buildOptionTile(
+                  title: 'Prismatic Aura / Rainbow Spectrum',
+                  description: 'Gentle living chromatic phase shift across the strip.',
+                  icon: Icons.looks_rounded,
+                  isSelected: _ambientStyle == 6,
+                  activeColor: AppTheme.cyan,
+                  onTap: () => setState(() => _ambientStyle = 6),
                 ),
 
                 if (_ambientStyle != 0) ...[
@@ -255,8 +334,8 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
                     child: Slider(
                       value: _ambientDepth.toDouble(),
                       min: 3,
-                      max: 18,
-                      divisions: 15,
+                      max: 25,
+                      divisions: 22,
                       label: '$_ambientDepth%',
                       onChanged: (val) => setState(() => _ambientDepth = val.round()),
                     ),

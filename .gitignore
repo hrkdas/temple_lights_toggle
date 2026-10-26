@@ -48,6 +48,10 @@ app.*.map.json
 .pio/
 **/firmware/.pio/
 .vscode/.browse.c_cpp.db*
+.calm/
+**/.calm/
+.codedeep/
+**/.codedeep/
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/

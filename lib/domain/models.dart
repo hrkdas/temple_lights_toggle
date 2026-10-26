@@ -189,6 +189,7 @@ class LightState {
     this.firmwareVersion,
     this.ledCount = 150,
     this.maxCurrentMa = 3000,
+    this.colorOrder = 0,
     this.transitionStyle = 0,
     this.ambientStyle = 1,
     this.ambientDepth = 6,
@@ -206,12 +207,25 @@ class LightState {
   final String? firmwareVersion;
   final int ledCount;
   final int maxCurrentMa;
+  final int colorOrder;      // 0=RGB (Hardware Default: Direct Red-Green-Blue), 1=GRB (WS2812B), 2=BRG, 3=BGR
   final int transitionStyle; // 0=Center-Out, 1=Sunrise, 2=Sunset, 3=Convergence, 4=Sparkle, 5=Domino, 6=Fade
   final int ambientStyle;    // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Embers, 5=Aurora, 6=Rainbow
   final int ambientDepth;
   final int activePreset;
   final int cycleFlags;
   final List<LedSegment> segments;
+
+  static const List<String> colorOrderNames = [
+    'RGB (Standard / Default)',
+    'GRB (WS2812B)',
+    'BRG',
+    'BGR',
+  ];
+
+  String get colorOrderName =>
+      (colorOrder >= 0 && colorOrder < colorOrderNames.length)
+          ? colorOrderNames[colorOrder]
+          : colorOrderNames[0];
 
   bool get isOff => !isOn || brightness == 0;
 
@@ -281,6 +295,7 @@ class LightState {
     String? firmwareVersion,
     int? ledCount,
     int? maxCurrentMa,
+    int? colorOrder,
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
@@ -300,6 +315,7 @@ class LightState {
         firmwareVersion: firmwareVersion ?? this.firmwareVersion,
         ledCount: ledCount ?? this.ledCount,
         maxCurrentMa: maxCurrentMa ?? this.maxCurrentMa,
+        colorOrder: colorOrder ?? this.colorOrder,
         transitionStyle: transitionStyle ?? this.transitionStyle,
         ambientStyle: ambientStyle ?? this.ambientStyle,
         ambientDepth: ambientDepth ?? this.ambientDepth,
@@ -478,12 +494,15 @@ class PairedDevice {
     this.cachedB,
     this.ledCount,
     this.maxCurrentMa,
+    this.colorOrder,
     this.transitionStyle,
     this.ambientStyle,
     this.ambientDepth,
     this.roomId,
     this.activePresetIndex,
     this.segments,
+    this.isGoogleHomeLinked,
+    this.rainmakerNodeId,
   });
 
   final String id;
@@ -499,12 +518,15 @@ class PairedDevice {
   int? cachedB;
   int? ledCount;
   int? maxCurrentMa;
+  int? colorOrder;
   int? transitionStyle;
   int? ambientStyle;
   int? ambientDepth;
   String? roomId;
   int? activePresetIndex;
   List<LedSegment>? segments;
+  bool? isGoogleHomeLinked;
+  String? rainmakerNodeId;
 
   String get displayName =>
       (customAlias != null && customAlias!.trim().isNotEmpty)
@@ -515,6 +537,7 @@ class PairedDevice {
 
   int get effectiveLedCount => ledCount ?? 150;
   int get effectiveMaxCurrentMa => maxCurrentMa ?? 3000;
+  int get effectiveColorOrder => colorOrder ?? 0;
   int get effectiveTransitionStyle => transitionStyle ?? 0;
   int get effectiveAmbientStyle => ambientStyle ?? 1;
   int get effectiveAmbientDepth => ambientDepth ?? 6;
@@ -537,28 +560,32 @@ class PairedDevice {
         'cachedB': cachedB,
         'ledCount': ledCount,
         'maxCurrentMa': maxCurrentMa,
+        'colorOrder': colorOrder,
         'transitionStyle': transitionStyle,
         'ambientStyle': ambientStyle,
         'ambientDepth': ambientDepth,
         'roomId': roomId,
         'activePresetIndex': activePresetIndex,
         if (segments != null) 'segments': segments!.map((s) => s.toJson()).toList(),
+        if (isGoogleHomeLinked != null) 'isGoogleHomeLinked': isGoogleHomeLinked,
+        if (rainmakerNodeId != null) 'rainmakerNodeId': rainmakerNodeId,
       };
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
-        id: json['id'] as String,
+        id: json['id'] as String? ?? 'unknown_device',
         name: json['name'] as String? ?? 'Temple Lights',
         lastSeen: DateTime.tryParse(json['lastSeen'] as String? ?? '') ?? DateTime.now(),
         customAlias: json['customAlias'] as String?,
         firmwareVersion: json['firmwareVersion'] as String?,
-        cachedBrightness: json['cachedBrightness'] as int?,
-        cachedMode: json['cachedMode'] as int?,
+        cachedBrightness: (json['cachedBrightness'] as num?)?.toInt(),
+        cachedMode: (json['cachedMode'] as num?)?.toInt(),
         cachedIsOn: json['cachedIsOn'] as bool?,
-        cachedR: json['cachedR'] as int?,
-        cachedG: json['cachedG'] as int?,
-        cachedB: json['cachedB'] as int?,
+        cachedR: (json['cachedR'] as num?)?.toInt(),
+        cachedG: (json['cachedG'] as num?)?.toInt(),
+        cachedB: (json['cachedB'] as num?)?.toInt(),
         ledCount: (json['ledCount'] as num?)?.toInt(),
         maxCurrentMa: (json['maxCurrentMa'] as num?)?.toInt(),
+        colorOrder: (json['colorOrder'] as num?)?.toInt(),
         transitionStyle: (json['transitionStyle'] as num?)?.toInt(),
         ambientStyle: (json['ambientStyle'] as num?)?.toInt(),
         ambientDepth: (json['ambientDepth'] as num?)?.toInt(),
@@ -567,6 +594,8 @@ class PairedDevice {
         segments: (json['segments'] as List<dynamic>?)
             ?.map((e) => LedSegment.fromJson(e as Map<String, dynamic>))
             .toList(),
+        isGoogleHomeLinked: json['isGoogleHomeLinked'] as bool?,
+        rainmakerNodeId: json['rainmakerNodeId'] as String?,
       );
 
   PairedDevice copyWith({
@@ -583,12 +612,15 @@ class PairedDevice {
     int? cachedB,
     int? ledCount,
     int? maxCurrentMa,
+    int? colorOrder,
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
     String? roomId,
     int? activePresetIndex,
     List<LedSegment>? segments,
+    bool? isGoogleHomeLinked,
+    String? rainmakerNodeId,
   }) =>
       PairedDevice(
         id: id ?? this.id,
@@ -604,12 +636,15 @@ class PairedDevice {
         cachedB: cachedB ?? this.cachedB,
         ledCount: ledCount ?? this.ledCount,
         maxCurrentMa: maxCurrentMa ?? this.maxCurrentMa,
+        colorOrder: colorOrder ?? this.colorOrder,
         transitionStyle: transitionStyle ?? this.transitionStyle,
         ambientStyle: ambientStyle ?? this.ambientStyle,
         ambientDepth: ambientDepth ?? this.ambientDepth,
         roomId: roomId ?? this.roomId,
         activePresetIndex: activePresetIndex ?? this.activePresetIndex,
         segments: segments ?? this.segments,
+        isGoogleHomeLinked: isGoogleHomeLinked ?? this.isGoogleHomeLinked,
+        rainmakerNodeId: rainmakerNodeId ?? this.rainmakerNodeId,
       );
 }
 
@@ -783,21 +818,21 @@ class LightSchedule {
         name: json['name'] as String? ?? 'Temple Schedule',
         isEnabled: json['isEnabled'] as bool? ?? true,
         hasTurnOn: json['hasTurnOn'] as bool? ?? true,
-        turnOnHour: json['turnOnHour'] as int? ?? 18,
-        turnOnMinute: json['turnOnMinute'] as int? ?? 0,
+        turnOnHour: (json['turnOnHour'] as num?)?.toInt() ?? 18,
+        turnOnMinute: (json['turnOnMinute'] as num?)?.toInt() ?? 0,
         hasTurnOff: json['hasTurnOff'] as bool? ?? true,
-        turnOffHour: json['turnOffHour'] as int? ?? 6,
-        turnOffMinute: json['turnOffMinute'] as int? ?? 0,
+        turnOffHour: (json['turnOffHour'] as num?)?.toInt() ?? 6,
+        turnOffMinute: (json['turnOffMinute'] as num?)?.toInt() ?? 0,
         repeatDays: (json['repeatDays'] as List<dynamic>?)
-                ?.map((e) => e as int)
+                ?.map((e) => (e as num).toInt())
                 .toList() ??
             const [1, 2, 3, 4, 5, 6, 7],
         lastTriggeredKey: json['lastTriggeredKey'] as String?,
-        targetMode: json['targetMode'] as int? ?? 0,
-        targetBrightness: json['targetBrightness'] as int? ?? 255,
-        targetR: json['targetR'] as int? ?? 255,
-        targetG: json['targetG'] as int? ?? 147,
-        targetB: json['targetB'] as int? ?? 41,
+        targetMode: (json['targetMode'] as num?)?.toInt() ?? 0,
+        targetBrightness: (json['targetBrightness'] as num?)?.toInt() ?? 255,
+        targetR: (json['targetR'] as num?)?.toInt() ?? 255,
+        targetG: (json['targetG'] as num?)?.toInt() ?? 147,
+        targetB: (json['targetB'] as num?)?.toInt() ?? 41,
       );
 }
 

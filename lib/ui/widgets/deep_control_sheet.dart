@@ -199,7 +199,7 @@ class _DeepControlSheetState extends ConsumerState<DeepControlSheet>
                               child: KelvinWarmthSlider(
                                 initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
                                 onChanged: (k, r, g, b) {
-                                  ctrl.setRgb(r, g, b);
+                                  ctrl.setLiveRgb(r, g, b);
                                 },
                                 onChangeEnd: (k, r, g, b) {
                                   ctrl.setRgb(r, g, b);
