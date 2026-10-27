@@ -8,9 +8,11 @@ final _log = AppLog.tag('ble.client');
 
 /// Manages a single active BLE device connection session, service discovery, and characteristic writes.
 class BleClient {
-  BleClient({FlutterReactiveBle? ble}) : _ble = ble ?? FlutterReactiveBle();
+  BleClient({FlutterReactiveBle? ble}) : _customBle = ble;
 
-  final FlutterReactiveBle _ble;
+  final FlutterReactiveBle? _customBle;
+  FlutterReactiveBle? _lazyBle;
+  FlutterReactiveBle get _ble => _customBle ?? (_lazyBle ??= FlutterReactiveBle());
 
   StreamSubscription<ConnectionStateUpdate>? _connSub;
   final _connStateController = StreamController<DeviceConnectionState>.broadcast();

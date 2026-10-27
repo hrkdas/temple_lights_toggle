@@ -1,6 +1,9 @@
 #include "rainmaker_manager.h"
 #include <RMaker.h>
 #include <esp_rmaker_user_mapping.h>
+#include <esp_rmaker_mqtt.h>
+#include <esp_rmaker_factory.h>
+#include <esp_rmaker_core.h>
 #include <WiFi.h>
 #include <math.h>
 
@@ -42,9 +45,42 @@ static int  s_cachedHue = 30;
 static int  s_cachedSaturation = 80;
 static int  s_cachedCct = 2700;
 
+// Claiming & MQTT Diagnostics
+static int  s_claimState = 0; // 0=unknown/reset, 1=started, 2=success, 3=failed
+static bool s_isClaimed = false;
+
 // Flag to prevent echo loops when RainMaker itself writes values
 static bool s_inRainmakerCallback = false;
 static unsigned long s_lastCloudWriteMs = 0;
+
+static void rmaker_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    if (event_base == RMAKER_EVENT) {
+        switch (event_id) {
+            case RMAKER_EVENT_INIT_DONE:
+                Serial.println("[RMAKER] Event: Core Initialized");
+                break;
+            case RMAKER_EVENT_CLAIM_STARTED:
+                Serial.println("[RMAKER] Event: Device Claiming Started");
+                s_claimState = 1;
+                break;
+            case RMAKER_EVENT_CLAIM_SUCCESSFUL:
+                Serial.println("[RMAKER] Event: Device Claiming Successful");
+                s_claimState = 2;
+                s_isClaimed = true;
+                break;
+            case RMAKER_EVENT_CLAIM_FAILED:
+                Serial.println("[RMAKER] Event: Device Claiming Failed");
+                s_claimState = 3;
+                break;
+            case RMAKER_EVENT_USER_NODE_MAPPING_DONE:
+                Serial.printf("[RMAKER] Event: User-Node Mapping Done on Node (User: %s)\n",
+                              event_data ? (char*)event_data : "none");
+                break;
+            default:
+                break;
+        }
+    }
+}
 
 // ============================================================================
 // COLOR CONVERSIONS (HSV -> RGB & KELVIN -> RGB)
@@ -286,6 +322,7 @@ void rainmakerManagerInit(const char* deviceName) {
 
     // Configure RainMaker
     RMaker.setTimeSync(false); // We already manage autonomous NTP clock in wifi_manager
+    esp_event_handler_register(RMAKER_EVENT, ESP_EVENT_ANY_ID, &rmaker_event_handler, NULL);
     s_node = RMaker.initNode(deviceName ? deviceName : "Temple Lights", "LightBulb");
 
     // Standard LightBulb device
@@ -391,20 +428,48 @@ bool rainmakerManagerIsRunning() {
 }
 
 bool rainmakerManagerIsCloudConnected() {
-    return s_isStarted && !s_otaPaused && wifiManagerIsConnected();
+    return s_isStarted && !s_otaPaused && esp_rmaker_is_mqtt_connected();
+}
+
+bool rainmakerManagerIsDeviceClaimed() {
+    if (s_isClaimed) return true;
+    if (esp_rmaker_is_mqtt_connected()) {
+        s_isClaimed = true;
+        return true;
+    }
+    size_t certLen = esp_rmaker_factory_get_size("client_cert");
+    if (certLen > 0) {
+        s_isClaimed = true;
+        return true;
+    }
+    return false;
+}
+
+int rainmakerManagerGetClaimState() {
+    return s_claimState;
+}
+
+int rainmakerManagerGetMapState() {
+    return (int)esp_rmaker_user_node_mapping_get_state();
 }
 
 const char* rainmakerManagerGetNodeId() {
     return esp_rmaker_get_node_id();
 }
 
-void rainmakerManagerMapUser(const char* userId, const char* secretKey) {
-    if (!userId || strlen(userId) == 0) return;
+bool rainmakerManagerMapUser(const char* userId, const char* secretKey) {
+    if (!userId || strlen(userId) == 0) return false;
+    if (!esp_rmaker_is_mqtt_connected()) {
+        Serial.println("[RMAKER] Cannot map user: MQTT is offline. Verify claiming and internet connection.");
+        return false;
+    }
     Serial.printf("[RMAKER] Triggering user-node mapping: user=%s, key=%s\n", userId, secretKey ? secretKey : "");
     esp_err_t err = esp_rmaker_start_user_node_mapping((char*)userId, (char*)(secretKey ? secretKey : ""));
     if (err == ESP_OK) {
         Serial.println("[RMAKER] User-node mapping workflow successfully triggered.");
+        return true;
     } else {
         Serial.printf("[RMAKER] esp_rmaker_start_user_node_mapping error: 0x%X\n", err);
+        return false;
     }
 }

@@ -408,6 +408,7 @@ void main() {
         'ledCount': 180.0,
         'maxCurrentMa': 3500.0,
         'colorOrder': 1.0,
+        'stripOrientation': 1.0,
         'transitionStyle': 3.0,
         'ambientStyle': 2.0,
         'ambientDepth': 8.0,
@@ -424,6 +425,8 @@ void main() {
       expect(restored.ledCount, 180);
       expect(restored.maxCurrentMa, 3500);
       expect(restored.colorOrder, 1);
+      expect(restored.stripOrientation, 1);
+      expect(restored.effectiveStripOrientation, 1);
       expect(restored.transitionStyle, 3);
       expect(restored.ambientStyle, 2);
       expect(restored.ambientDepth, 8);

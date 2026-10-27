@@ -228,6 +228,7 @@ class _DeepControlSheetState extends ConsumerState<DeepControlSheet>
                             SingleChildScrollView(
                               child: StripVisualizerWidget(
                                 totalLeds: light.ledCount > 0 ? light.ledCount : 105,
+                                stripOrientation: light.stripOrientation,
                                 segments: light.segments.isNotEmpty
                                     ? light.segments
                                     : [

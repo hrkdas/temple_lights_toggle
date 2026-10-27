@@ -4,6 +4,7 @@ import '../../core/haptics.dart';
 import '../../domain/models.dart';
 import '../../domain/providers.dart';
 import '../../ui/theme.dart';
+import '../../ui/widgets/wifi_signal_icon.dart';
 
 class WifiSetupSheet extends ConsumerStatefulWidget {
   const WifiSetupSheet({super.key});
@@ -25,15 +26,23 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   WifiNetworkItem? _selectedNetwork;
+  int _targetSlot = 1; // 1 = Primary, 2 = Backup
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final wifiState = ref.read(wifiProvider);
+      // Query status first without dropping connection
       ref.read(wifiProvider.notifier).requestStatus();
-      if (!wifiState.isConnected && wifiState.scannedNetworks.isEmpty) {
-        ref.read(wifiProvider.notifier).scanNetworks();
+
+      // If user has no scan results cached, trigger a non-destructive scan
+      final wifiState = ref.read(wifiProvider);
+      if (wifiState.scannedNetworks.isEmpty && !wifiState.isScanning) {
+        Future.delayed(const Duration(milliseconds: 250), () {
+          if (mounted) {
+            ref.read(wifiProvider.notifier).scanNetworks();
+          }
+        });
       }
     });
   }
@@ -46,8 +55,23 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
 
   void _onSelectNetwork(WifiNetworkItem network) {
     AppHaptics.light();
+    final wifiState = ref.read(wifiProvider);
+
+    // Auto-suggest optimal slot:
+    // If Slot 1 is empty, default to Slot 1.
+    // If Slot 1 is already configured, default to Slot 2 (Backup).
+    int suggestedSlot = 1;
+    if (wifiState.hasSlot1 && !wifiState.hasSlot2) {
+      suggestedSlot = 2;
+    } else if (wifiState.slot1?.ssid == network.ssid) {
+      suggestedSlot = 1;
+    } else if (wifiState.slot2?.ssid == network.ssid) {
+      suggestedSlot = 2;
+    }
+
     setState(() {
       _selectedNetwork = network;
+      _targetSlot = suggestedSlot;
       _passwordController.clear();
     });
   }
@@ -69,19 +93,21 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
     await ref.read(wifiProvider.notifier).connect(
           ssid: net.ssid,
           psk: psk,
+          slot: _targetSlot,
           save: true,
         );
   }
 
-  Future<void> _confirmForget() async {
+  Future<void> _confirmForgetSlot(int slot, String ssid) async {
+    final slotName = (slot == 1) ? 'Primary (Slot 1)' : 'Backup (Slot 2)';
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Forget Wi-Fi Network?', style: AppTheme.heading(size: 18)),
+        title: Text('Forget $slotName?', style: AppTheme.heading(size: 18)),
         content: Text(
-          'The ESP32 will disconnect from this network and erase saved credentials. Autonomous NTP clock sync will be disabled until reconnected.',
+          'Remove "$ssid" from ESP32 memory? If an alternate network is configured, the device will seamlessly switch to it.',
           style: AppTheme.body(size: 14, color: AppTheme.textSecondary),
         ),
         actions: [
@@ -104,7 +130,7 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
 
     if (confirm == true) {
       AppHaptics.warn();
-      await ref.read(wifiProvider.notifier).forget();
+      await ref.read(wifiProvider.notifier).forget(slot: slot);
     }
   }
 
@@ -115,7 +141,7 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
 
     return Container(
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.90,
+        maxHeight: MediaQuery.of(context).size.height * 0.92,
       ),
       padding: EdgeInsets.only(bottom: bottomInset),
       decoration: const BoxDecoration(
@@ -151,14 +177,14 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
             child: Row(
               children: [
                 Container(
-                  width: 36,
-                  height: 36,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
                     color: AppTheme.surfaceGlow,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: AppTheme.amber.withValues(alpha: 0.3)),
                   ),
-                  child: const Icon(Icons.wifi_rounded, color: AppTheme.amber, size: 20),
+                  child: const Icon(Icons.wifi_rounded, color: AppTheme.amber, size: 22),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -170,7 +196,7 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
                         style: AppTheme.heading(size: 18),
                       ),
                       Text(
-                        'Autonomous 2.4 GHz SNTP Synchronizer',
+                        'Dual-Slot Auto-Failover & NTP Engine',
                         style: AppTheme.body(size: 12, color: AppTheme.textMuted),
                       ),
                     ],
@@ -191,29 +217,35 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               children: [
-                // 1. Current Network Status Card
-                _buildActiveConnectionCard(wifiState),
+                // 1. Dual Saved Networks Dashboard (Slot 1 & Slot 2)
+                _buildDualSlotsSection(wifiState),
                 const SizedBox(height: 16),
 
-                // 2. Connection Progress Stepper
+                // 2. Active NTP Sync Banner (when connected to any slot)
+                if (wifiState.isConnected) ...[
+                  _buildNtpSyncBanner(wifiState),
+                  const SizedBox(height: 16),
+                ],
+
+                // 3. In-flight Connection Progress Stepper
                 if (wifiState.isConnecting) ...[
                   _buildConnectingStepper(wifiState),
                   const SizedBox(height: 16),
                 ],
 
-                // 3. Failure Error Banner
+                // 4. Failure Error Banner
                 if (wifiState.hasFailed) ...[
                   _buildFailureBanner(wifiState),
                   const SizedBox(height: 16),
                 ],
 
-                // 4. Password Input Sheet (if a network is tapped)
+                // 5. Password & Slot Assignment Card (if network selected)
                 if (_selectedNetwork != null && !wifiState.isConnecting) ...[
-                  _buildPasswordCard(),
+                  _buildPasswordCard(wifiState),
                   const SizedBox(height: 16),
                 ],
 
-                // 5. Available Networks List
+                // 6. Available Networks List (with Live Signal Range)
                 _buildScannerSection(wifiState),
               ],
             ),
@@ -223,43 +255,114 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
     );
   }
 
-  Widget _buildActiveConnectionCard(WifiConnectionState wifi) {
-    final isConn = wifi.isConnected;
+  // ==========================================================================
+  // DUAL SLOTS CARDS (SLOT 1 PRIMARY & SLOT 2 BACKUP AUTO-FAILOVER)
+  // ==========================================================================
+
+  Widget _buildDualSlotsSection(WifiConnectionState wifi) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Saved Wi-Fi Networks (Dual Auto-Failover)',
+              style: AppTheme.heading(size: 14),
+            ),
+            if (wifi.hasAnySavedSlot)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppTheme.amber.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '${(wifi.hasSlot1 ? 1 : 0) + (wifi.hasSlot2 ? 1 : 0)} / 2 SAVED',
+                  style: AppTheme.heading(size: 10, color: AppTheme.amber),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+
+        // Slot 1: Primary
+        _buildSlotCard(
+          slotNumber: 1,
+          slotTitle: 'SLOT 1 • PRIMARY NETWORK',
+          slotItem: wifi.slot1,
+          isActive: wifi.activeSlot == 1 && wifi.isConnected,
+          wifi: wifi,
+        ),
+        const SizedBox(height: 10),
+
+        // Slot 2: Backup Auto-Failover
+        _buildSlotCard(
+          slotNumber: 2,
+          slotTitle: 'SLOT 2 • BACKUP (AUTO-FAILOVER)',
+          slotItem: wifi.slot2,
+          isActive: wifi.activeSlot == 2 && wifi.isConnected,
+          wifi: wifi,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSlotCard({
+    required int slotNumber,
+    required String slotTitle,
+    required WifiSlotItem? slotItem,
+    required bool isActive,
+    required WifiConnectionState wifi,
+  }) {
+    final hasConfig = slotItem != null && slotItem.isConfigured && slotItem.ssid.isNotEmpty;
+    final isConnected = wifi.isConnected;
+    final effectiveRssi = isActive ? wifi.rssi : (slotItem?.rssi ?? 0);
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isConn ? AppTheme.green.withValues(alpha: 0.35) : AppTheme.border,
-          width: 1.5,
+          color: isActive
+              ? AppTheme.green.withValues(alpha: 0.4)
+              : (hasConfig ? AppTheme.amber.withValues(alpha: 0.25) : AppTheme.border),
+          width: isActive ? 1.5 : 1.0,
         ),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x0A3B2E1E),
-            blurRadius: 12,
-            offset: Offset(0, 4),
+            color: Color(0x083B2E1E),
+            blurRadius: 10,
+            offset: Offset(0, 3),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header Row
           Row(
             children: [
               Container(
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: isConn ? AppTheme.green.withValues(alpha: 0.12) : AppTheme.surfaceRaised,
+                  color: isActive
+                      ? AppTheme.green.withValues(alpha: 0.12)
+                      : (hasConfig ? AppTheme.amber.withValues(alpha: 0.12) : AppTheme.surfaceRaised),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  isConn ? Icons.wifi_rounded : Icons.wifi_off_rounded,
-                  color: isConn ? AppTheme.green : AppTheme.textMuted,
-                  size: 18,
-                ),
+                child: hasConfig
+                    ? Center(
+                        child: WifiSignalIcon(
+                          rssi: effectiveRssi,
+                          size: 18,
+                          showQualityColor: isActive,
+                          color: isActive ? AppTheme.green : (hasConfig ? AppTheme.amber : AppTheme.textMuted),
+                        ),
+                      )
+                    : const Icon(Icons.wifi_off_rounded, size: 16, color: AppTheme.textMuted),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -267,84 +370,102 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isConn ? wifi.currentSsid : 'No Active Wi-Fi Connection',
-                      style: AppTheme.heading(size: 15),
+                      slotTitle,
+                      style: AppTheme.heading(
+                        size: 10,
+                        color: isActive ? AppTheme.green : (hasConfig ? AppTheme.amber : AppTheme.textMuted),
+                      ),
                     ),
+                    const SizedBox(height: 2),
                     Text(
-                      isConn ? 'IP: ${wifi.ipAddress} • RSSI: ${wifi.rssi} dBm' : 'ESP32 clock running on offline BLE time',
-                      style: AppTheme.body(size: 12, color: AppTheme.textMuted),
+                      hasConfig ? slotItem.ssid : 'Empty — Tap network below to assign',
+                      style: AppTheme.heading(
+                        size: 14,
+                        color: hasConfig ? AppTheme.textPrimary : AppTheme.textMuted,
+                      ),
                     ),
                   ],
                 ),
               ),
+
+              // Status Badge
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: (isConn ? AppTheme.green : AppTheme.textMuted).withValues(alpha: 0.12),
+                  color: (isActive
+                          ? AppTheme.green
+                          : (hasConfig ? AppTheme.amber : AppTheme.border))
+                      .withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
-                    color: (isConn ? AppTheme.green : AppTheme.textMuted).withValues(alpha: 0.3),
+                    color: (isActive
+                            ? AppTheme.green
+                            : (hasConfig ? AppTheme.amber : AppTheme.border))
+                        .withValues(alpha: 0.3),
                   ),
                 ),
                 child: Text(
-                  isConn ? 'ONLINE' : 'OFFLINE',
+                  isActive
+                      ? 'ONLINE • ACTIVE'
+                      : (hasConfig ? 'STANDBY' : 'EMPTY'),
                   style: AppTheme.heading(
-                    size: 10,
-                    color: isConn ? AppTheme.green : AppTheme.textMuted,
+                    size: 9,
+                    color: isActive
+                        ? AppTheme.green
+                        : (hasConfig ? AppTheme.amber : AppTheme.textMuted),
                   ),
                 ),
               ),
             ],
           ),
-          if (isConn) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceGlow,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppTheme.amber.withValues(alpha: 0.2)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.access_time_rounded, size: 16, color: AppTheme.amber),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Autonomous NTP clock sync active. Schedules run accurately without phone.',
-                      style: AppTheme.body(size: 11, color: AppTheme.textSecondary),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
+
+          // Subtitle / Telemetry
+          if (hasConfig) ...[
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.amber,
-                      side: const BorderSide(color: AppTheme.amber),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                    icon: const Icon(Icons.sync_rounded, size: 16),
-                    label: const Text('Sync NTP Now', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    onPressed: () {
-                      AppHaptics.light();
-                      ref.read(wifiProvider.notifier).triggerNtpSync();
-                    },
+                  child: Text(
+                    isActive
+                        ? 'IP: ${wifi.ipAddress} • Signal: ${wifi.rssi} dBm (${WifiSignalIcon.qualityLabelForRssi(wifi.rssi)})'
+                        : (slotNumber == 1
+                            ? 'Primary AP • Connected automatically on boot'
+                            : 'Backup AP • Auto-connects if Slot 1 becomes unreachable'),
+                    style: AppTheme.body(size: 11, color: AppTheme.textMuted),
                   ),
                 ),
-                const SizedBox(width: 10),
-                TextButton(
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            // Slot Actions
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (!isActive && isConnected)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppTheme.amber,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+                    label: Text(
+                      'Switch to Slot $slotNumber',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                    onPressed: () {
+                      AppHaptics.light();
+                      ref.read(wifiProvider.notifier).switchSlot(slotNumber);
+                    },
+                  ),
+                TextButton.icon(
                   style: TextButton.styleFrom(
                     foregroundColor: AppTheme.red,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   ),
-                  onPressed: _confirmForget,
-                  child: const Text('Forget', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 15),
+                  label: const Text('Forget', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  onPressed: () => _confirmForgetSlot(slotNumber, slotItem.ssid),
                 ),
               ],
             ),
@@ -354,11 +475,66 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
     );
   }
 
+  // ==========================================================================
+  // NTP CLOCK SYNC BANNER
+  // ==========================================================================
+
+  Widget _buildNtpSyncBanner(WifiConnectionState wifi) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceGlow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.amber.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.access_time_rounded, size: 18, color: AppTheme.amber),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Autonomous Clock Active (SNTP)',
+                  style: AppTheme.heading(size: 12, color: AppTheme.amber),
+                ),
+                Text(
+                  'Schedules trigger accurately without phone connection.',
+                  style: AppTheme.body(size: 11, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.amber,
+              side: const BorderSide(color: AppTheme.amber),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              AppHaptics.light();
+              ref.read(wifiProvider.notifier).triggerNtpSync();
+            },
+            child: const Text('Sync NTP', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================================================
+  // CONNECTING STEPPER
+  // ==========================================================================
+
   Widget _buildConnectingStepper(WifiConnectionState wifi) {
     int currentStep = 1;
     if (wifi.phase == WifiPhase.gotIp) currentStep = 2;
     if (wifi.phase == WifiPhase.internetOk) currentStep = 3;
     if (wifi.phase == WifiPhase.saved || wifi.phase == WifiPhase.connected) currentStep = 4;
+
+    final targetSlotText = wifi.activeSlot > 0 ? ' [Slot ${wifi.activeSlot}]' : '';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -379,7 +555,7 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
               ),
               const SizedBox(width: 10),
               Text(
-                'Connecting to ${wifi.currentSsid}…',
+                'Connecting to ${wifi.currentSsid}$targetSlotText…',
                 style: AppTheme.heading(size: 14, color: AppTheme.amber),
               ),
             ],
@@ -466,7 +642,11 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
     );
   }
 
-  Widget _buildPasswordCard() {
+  // ==========================================================================
+  // PASSWORD INPUT & SLOT ASSIGNMENT CARD
+  // ==========================================================================
+
+  Widget _buildPasswordCard(WifiConnectionState wifi) {
     final net = _selectedNetwork!;
 
     return Container(
@@ -488,11 +668,11 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
         children: [
           Row(
             children: [
-              const Icon(Icons.lock_outline_rounded, size: 18, color: AppTheme.amber),
+              WifiSignalIcon(rssi: net.rssi, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Connect to ${net.ssid}',
+                  'Configure ${net.ssid}',
                   style: AppTheme.heading(size: 14),
                 ),
               ),
@@ -503,6 +683,42 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
             ],
           ),
           const SizedBox(height: 10),
+
+          // Slot Assignment Selector
+          Text(
+            'Assign To Slot:',
+            style: AppTheme.body(size: 12, color: AppTheme.textSecondary, weight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: ChoiceChip(
+                  label: Text('Slot 1 (Primary)', style: TextStyle(fontSize: 12, fontWeight: _targetSlot == 1 ? FontWeight.bold : FontWeight.normal)),
+                  selected: _targetSlot == 1,
+                  selectedColor: AppTheme.amber.withValues(alpha: 0.25),
+                  checkmarkColor: AppTheme.amber,
+                  onSelected: (val) {
+                    if (val) setState(() => _targetSlot = 1);
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ChoiceChip(
+                  label: Text('Slot 2 (Backup)', style: TextStyle(fontSize: 12, fontWeight: _targetSlot == 2 ? FontWeight.bold : FontWeight.normal)),
+                  selected: _targetSlot == 2,
+                  selectedColor: AppTheme.amber.withValues(alpha: 0.25),
+                  checkmarkColor: AppTheme.amber,
+                  onSelected: (val) {
+                    if (val) setState(() => _targetSlot = 2);
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
           if (net.isSecured)
             TextField(
               controller: _passwordController,
@@ -550,13 +766,20 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
                 elevation: 0,
               ),
               onPressed: _connect,
-              child: const Text('Connect & Verify', style: TextStyle(fontWeight: FontWeight.bold)),
+              child: Text(
+                'Connect & Save to Slot $_targetSlot',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         ],
       ),
     );
   }
+
+  // ==========================================================================
+  // AVAILABLE NETWORKS SCANNER LIST (WITH LIVE SIGNAL RANGE)
+  // ==========================================================================
 
   Widget _buildScannerSection(WifiConnectionState wifi) {
     return Column(
@@ -654,6 +877,8 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
                 itemBuilder: (ctx, i) {
                   final net = wifi.scannedNetworks[i];
                   final isSelected = _selectedNetwork?.ssid == net.ssid;
+                  final isSlot1 = wifi.slot1?.ssid == net.ssid;
+                  final isSlot2 = wifi.slot2?.ssid == net.ssid;
 
                   return InkWell(
                     onTap: () => _onSelectNetwork(net),
@@ -662,25 +887,53 @@ class _WifiSetupSheetState extends ConsumerState<WifiSetupSheet> {
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       child: Row(
                         children: [
-                          Icon(
-                            Icons.wifi_rounded,
+                          WifiSignalIcon(
+                            rssi: net.rssi,
                             size: 20,
-                            color: isSelected ? AppTheme.amber : AppTheme.textPrimary,
+                            showQualityColor: true,
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  net.ssid,
-                                  style: AppTheme.heading(
-                                    size: 14,
-                                    color: isSelected ? AppTheme.amber : AppTheme.textPrimary,
-                                  ),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        net.ssid,
+                                        style: AppTheme.heading(
+                                          size: 14,
+                                          color: isSelected ? AppTheme.amber : AppTheme.textPrimary,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    if (isSlot1)
+                                      Container(
+                                        margin: const EdgeInsets.only(left: 6),
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: AppTheme.amber.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text('SLOT 1', style: AppTheme.heading(size: 9, color: AppTheme.amber)),
+                                      ),
+                                    if (isSlot2)
+                                      Container(
+                                        margin: const EdgeInsets.only(left: 6),
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: AppTheme.cyan.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text('SLOT 2', style: AppTheme.heading(size: 9, color: AppTheme.cyan)),
+                                      ),
+                                  ],
                                 ),
+                                const SizedBox(height: 2),
                                 Text(
-                                  '${net.auth} • ${net.rssi} dBm',
+                                  '${net.auth} • ${net.rssi} dBm • ${net.signalQualityLabel}',
                                   style: AppTheme.body(size: 11, color: AppTheme.textMuted),
                                 ),
                               ],

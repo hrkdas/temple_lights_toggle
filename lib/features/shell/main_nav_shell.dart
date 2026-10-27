@@ -11,6 +11,7 @@ import '../scanner/device_sheet.dart';
 import '../schedule/schedule_screen.dart';
 import '../settings/settings_sheet.dart';
 import '../wifi/wifi_setup_sheet.dart';
+import '../../ui/widgets/wifi_signal_icon.dart';
 
 /// Main navigation shell hosting Lights (Control), Schedule, and Logs tabs.
 class MainNavShell extends ConsumerStatefulWidget {
@@ -266,12 +267,18 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
                               iconSize: 20,
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                               constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                              icon: Icon(
-                                isConnected ? Icons.wifi_rounded : (isConnecting ? Icons.wifi_find_rounded : Icons.wifi_rounded),
-                                color: iconColor,
-                              ),
+                              icon: isConnected
+                                  ? WifiSignalIcon(
+                                      rssi: wifi.rssi,
+                                      size: 20,
+                                      color: iconColor,
+                                    )
+                                  : Icon(
+                                      isConnecting ? Icons.wifi_find_rounded : Icons.wifi_rounded,
+                                      color: iconColor,
+                                    ),
                               tooltip: isConnected
-                                  ? 'WiFi: ${wifi.currentSsid} (Tap to manage)'
+                                  ? 'WiFi: ${wifi.currentSsid} (${wifi.rssi} dBm, Slot ${wifi.activeSlot})'
                                   : (isConnecting ? 'Connecting to WiFi...' : 'Configure WiFi & Clock'),
                               onPressed: () => WifiSetupSheet.show(context),
                             );

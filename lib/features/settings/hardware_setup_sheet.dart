@@ -29,6 +29,7 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
   late int _ledCount;
   late int _maxCurrentMa;
   late int _colorOrder;
+  late int _stripOrientation;
   late final TextEditingController _customCountController;
   bool _isCustomCount = false;
   bool _testingAlignment = false;
@@ -43,6 +44,7 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
     _ledCount = light.ledCount;
     _maxCurrentMa = light.maxCurrentMa;
     _colorOrder = light.colorOrder;
+    _stripOrientation = light.stripOrientation;
     _isCustomCount = !_presetLedCounts.contains(_ledCount);
     _customCountController = TextEditingController(text: _ledCount.toString());
   }
@@ -91,15 +93,17 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
           leds: finalCount,
           maxCurrentMa: _maxCurrentMa,
           colorOrder: _colorOrder,
+          stripOrientation: _stripOrientation,
         );
 
     if (mounted) {
+      final messenger = ScaffoldMessenger.of(context);
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           backgroundColor: AppTheme.surfaceRaised,
           content: Text(
-            'Hardware configured: $finalCount LEDs (${_formatMeters(finalCount)}) • Max ${_maxCurrentMa}mA • Color: ${LightState.colorOrderNames[_colorOrder.clamp(0, 3)]}',
+            'Hardware configured: $finalCount LEDs (${_formatMeters(finalCount)}) • Max ${_maxCurrentMa}mA • Color: ${LightState.colorOrderNames[_colorOrder.clamp(0, 3)]} • ${LightState.orientationNames[_stripOrientation.clamp(0, 1)]}',
             style: const TextStyle(color: AppTheme.green, fontSize: 13),
           ),
         ),
@@ -141,6 +145,65 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
             ),
             const SizedBox(width: 6),
             Text(name, style: AppTheme.heading(size: 11, color: AppTheme.textPrimary)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOrientationOptionCard({
+    required String title,
+    required String subtitle,
+    required String directionGlyph,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () {
+        AppHaptics.selection();
+        onTap();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.amber.withValues(alpha: 0.12) : AppTheme.surfaceRaised,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppTheme.amber : AppTheme.border,
+            width: selected ? 1.6 : 1.0,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  directionGlyph,
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                ),
+                if (selected)
+                  const Icon(Icons.check_circle_rounded, size: 16, color: AppTheme.amber)
+                else
+                  Icon(Icons.circle_outlined, size: 16, color: AppTheme.borderBright),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              style: AppTheme.heading(
+                size: 12.5,
+                color: selected ? AppTheme.amber : AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
+            ),
           ],
         ),
       ),
@@ -293,8 +356,10 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
                 // Power Budget / Current Limiter Section
                 Row(
                   children: [
-                    Text('Power Safety Budget (Software Fuse)', style: AppTheme.heading(size: 14, color: AppTheme.cyan)),
-                    const Spacer(),
+                    Expanded(
+                      child: Text('Power Safety Budget (Software Fuse)', style: AppTheme.heading(size: 14, color: AppTheme.cyan)),
+                    ),
+                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
@@ -434,6 +499,144 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
 
                 const SizedBox(height: 24),
 
+                // LED Strip Mounting & Orientation Calibration Section
+                Row(
+                  children: [
+                    const Icon(Icons.swap_horiz_rounded, size: 20, color: AppTheme.amber),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('LED Strip Mounting & Orientation', style: AppTheme.heading(size: 14, color: AppTheme.amber)),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amber.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _stripOrientation == 1 ? 'Inverted (RTL)' : 'Standard (LTR)',
+                        style: AppTheme.mono(size: 10.5, color: AppTheme.amber),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Calibrates whether your physical strip wire begins on the left or right of your shrine. Fixes inverted ranges (e.g. range 1–50 lighting up the right side instead of the left):',
+                  style: AppTheme.body(size: 12, color: AppTheme.textMuted),
+                ),
+                const SizedBox(height: 12),
+
+                // Direction Choice Cards
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildOrientationOptionCard(
+                        title: 'Left to Right',
+                        subtitle: 'DIN on Left (Standard)',
+                        directionGlyph: '🔴 ──► 🔵',
+                        selected: _stripOrientation == 0,
+                        onTap: () {
+                          setState(() => _stripOrientation = 0);
+                          ref.read(lightControlProvider.notifier).setStripOrientation(0);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildOrientationOptionCard(
+                        title: 'Right to Left',
+                        subtitle: 'DIN on Right (Inverted)',
+                        directionGlyph: '🔵 ◄── 🔴',
+                        selected: _stripOrientation == 1,
+                        onTap: () {
+                          setState(() => _stripOrientation = 1);
+                          ref.read(lightControlProvider.notifier).setStripOrientation(1);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 12),
+
+                // Physical Orientation Diagram
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceRaised,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'SHRINE PERSPECTIVE (FRONT VIEW)',
+                              style: AppTheme.heading(size: 10, color: AppTheme.textMuted, letterSpacing: 0.8),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _stripOrientation == 1 ? 'Hardware Inverted' : 'Direct LTR',
+                            style: AppTheme.mono(size: 10, color: AppTheme.amber),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFFF2222)),
+                              ),
+                              const SizedBox(width: 5),
+                              Text('Left (#1)', style: AppTheme.heading(size: 11, color: AppTheme.textPrimary)),
+                            ],
+                          ),
+                          Flexible(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Text(
+                                _stripOrientation == 0
+                                    ? '── DIN In ──►'
+                                    : '◄── Inverted ──',
+                                style: AppTheme.mono(size: 10, color: AppTheme.amber),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('Right (#$_ledCount)', style: AppTheme.heading(size: 11, color: AppTheme.textPrimary)),
+                              const SizedBox(width: 5),
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF2979FF)),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 24),
+
                 // Strip Alignment Diagnostic Test Button
                 Container(
                   padding: const EdgeInsets.all(14),
@@ -449,12 +652,12 @@ class _HardwareSetupSheetState extends ConsumerState<HardwareSetupSheet> {
                         children: [
                           const Icon(Icons.flash_on_rounded, size: 20, color: AppTheme.amber),
                           const SizedBox(width: 10),
-                          Text('Strip Alignment Test', style: AppTheme.heading(size: 14)),
+                          Text('Strip Alignment & Orientation Test', style: AppTheme.heading(size: 14)),
                         ],
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Flashes start in Red, center in Green, and end in Blue to confirm physical orientation:',
+                        'Flashes start in RED, center in GREEN, and end in BLUE to confirm physical orientation:\n• RED must illuminate on your LEFT (#1)\n• BLUE must illuminate on your RIGHT (#$_ledCount)\nIf reversed on your shrine, choose "Right to Left" above.',
                         style: AppTheme.body(size: 12, color: AppTheme.textMuted),
                       ),
                       const SizedBox(height: 12),

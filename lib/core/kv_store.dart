@@ -19,6 +19,7 @@ class KvStore {
   Future<void> putJson(String key, Object value) async {
     await _prefs.setString(key, jsonEncode(value));
   }
+  Future<void> setJsonList(String key, List<dynamic> value) => putJson(key, value);
   Map<String, dynamic>? getJsonMap(String key) {
     final s = _prefs.getString(key);
     if (s == null) return null;

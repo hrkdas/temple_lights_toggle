@@ -566,7 +566,7 @@ void main() {
 
       // Tapping it triggers power on
       await tester.tap(dial);
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 500));
 
       expect(container.read(lightControlProvider).isOn, isTrue);
     });

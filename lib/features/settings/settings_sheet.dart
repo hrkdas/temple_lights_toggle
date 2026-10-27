@@ -9,6 +9,7 @@ import '../../domain/providers.dart';
 import '../../ui/theme.dart';
 import '../ota/ota_update_screen.dart';
 import '../wifi/wifi_setup_sheet.dart';
+import '../../ui/widgets/wifi_signal_icon.dart';
 import 'animation_picker_sheet.dart';
 import 'hardware_setup_sheet.dart';
 
@@ -551,11 +552,70 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                 ),
                               ),
                             ] else ...[
-                              const SizedBox(height: 6),
+                              const SizedBox(height: 8),
+                              // Diagnostic health card for claiming & MQTT state
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: (light.rainmakerMqttConnected
+                                          ? AppTheme.green
+                                          : (light.rainmakerDeviceClaimed ? AppTheme.amber : AppTheme.red))
+                                      .withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: (light.rainmakerMqttConnected
+                                            ? AppTheme.green
+                                            : (light.rainmakerDeviceClaimed ? AppTheme.amber : AppTheme.red))
+                                        .withValues(alpha: 0.35),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          light.rainmakerMqttConnected
+                                              ? Icons.cloud_done_rounded
+                                              : (light.rainmakerDeviceClaimed ? Icons.cloud_queue_rounded : Icons.vpn_key_off_rounded),
+                                          size: 15,
+                                          color: light.rainmakerMqttConnected
+                                              ? AppTheme.green
+                                              : (light.rainmakerDeviceClaimed ? AppTheme.amber : AppTheme.red),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            light.rainmakerMqttConnected
+                                                ? 'Cloud Ready (MQTT Connected)'
+                                                : (light.rainmakerDeviceClaimed
+                                                    ? 'MQTT Offline (Check Wi-Fi)'
+                                                    : 'Unclaimed (No Cloud Cert)'),
+                                            style: AppTheme.heading(
+                                              size: 11,
+                                              color: light.rainmakerMqttConnected
+                                                  ? AppTheme.green
+                                                  : (light.rainmakerDeviceClaimed ? AppTheme.amber : AppTheme.red),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (!light.rainmakerDeviceClaimed) ...[
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        'ESP32 requires one-time certificate claiming before linking.',
+                                        style: AppTheme.body(size: 10, color: AppTheme.textMuted),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 8),
                               Row(
                                 children: [
                                   Expanded(
-                                    child: Text('Device Node: $nodeId', style: AppTheme.mono(size: 11, color: AppTheme.textSecondary)),
+                                    child: Text('Node: $nodeId', style: AppTheme.mono(size: 11, color: AppTheme.textSecondary)),
                                   ),
                                   ElevatedButton(
                                     style: ElevatedButton.styleFrom(
@@ -567,8 +627,17 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                     onPressed: () async {
                                       final ok = await ref.read(rainmakerAuthProvider.notifier).mapActiveDevice(nodeId: nodeId);
                                       if (context.mounted) {
+                                        final isVerified = ref.read(rainmakerAuthProvider).nodes.contains(nodeId);
                                         ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(content: Text(ok ? 'Device successfully linked to account!' : 'Failed to link device.')),
+                                          SnackBar(
+                                            content: Text(
+                                              isVerified
+                                                  ? 'Device linked and verified in Google Home!'
+                                                  : (ok
+                                                      ? 'Mapping request sent! Awaiting device MQTT sync.'
+                                                      : (ref.read(rainmakerAuthProvider).errorMessage ?? 'Failed to link device.')),
+                                            ),
+                                          ),
                                         );
                                       }
                                     },
@@ -1072,16 +1141,19 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                         ? AppTheme.green
                         : (isConnecting ? AppTheme.amber : AppTheme.cyan);
 
+                    final String activeSlotLabel = wifi.activeSlot > 0 ? 'Slot ${wifi.activeSlot}' : '';
                     final String statusText = isConnected
-                        ? 'Connected • ${wifi.currentSsid}'
+                        ? 'Connected • $activeSlotLabel ${wifi.currentSsid} (${wifi.rssi} dBm)'
                         : (isConnecting
                             ? 'Connecting to ${wifi.currentSsid}...'
-                            : (wifi.currentSsid.isNotEmpty
-                                ? 'Offline • Saved: ${wifi.currentSsid}'
-                                : 'No WiFi configured'));
+                            : (wifi.hasAnySavedSlot
+                                ? 'Offline • Dual-Slot Failover Ready'
+                                : (wifi.currentSsid.isNotEmpty
+                                    ? 'Offline • Saved: ${wifi.currentSsid}'
+                                    : 'No WiFi configured')));
 
                     final String subText = isConnected && wifi.ipAddress.isNotEmpty
-                        ? 'IP: ${wifi.ipAddress} • SNTP active'
+                        ? 'IP: ${wifi.ipAddress} • SNTP active • ${WifiSignalIcon.qualityLabelForRssi(wifi.rssi)} Signal'
                         : (isConnecting
                             ? 'Verifying network & NTP gateway'
                             : 'Synchronizes schedules & clock via NTP');
@@ -1108,15 +1180,19 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                   color: accentColor.withValues(alpha: 0.12),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
-                                child: Icon(
-                                  isConnected
-                                      ? Icons.wifi_rounded
-                                      : (isConnecting || isScanning
-                                          ? Icons.wifi_find_rounded
-                                          : Icons.wifi_off_rounded),
-                                  size: 20,
-                                  color: accentColor,
-                                ),
+                                child: isConnected
+                                    ? WifiSignalIcon(
+                                        rssi: wifi.rssi,
+                                        size: 20,
+                                        color: accentColor,
+                                      )
+                                    : Icon(
+                                        (isConnecting || isScanning
+                                            ? Icons.wifi_find_rounded
+                                            : Icons.wifi_off_rounded),
+                                        size: 20,
+                                        color: accentColor,
+                                      ),
                               ),
                               const SizedBox(width: 12),
                               Expanded(
@@ -1218,8 +1294,9 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                 Consumer(
                                   builder: (context, ref, _) {
                                     final light = ref.watch(lightControlProvider);
+                                    final dirStr = light.stripOrientation == 1 ? 'RTL (Inverted)' : 'LTR (Standard)';
                                     return Text(
-                                      '${light.ledCount} LEDs (${light.formattedLength}) • Safety: ${light.maxCurrentMa}mA',
+                                      '${light.ledCount} LEDs (${light.formattedLength}) • Safety: ${light.maxCurrentMa}mA • $dirStr',
                                       style: AppTheme.mono(size: 11, color: AppTheme.textSecondary),
                                     );
                                   },

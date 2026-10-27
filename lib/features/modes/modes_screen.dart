@@ -715,6 +715,7 @@ class _ModesScreenState extends ConsumerState<ModesScreen> {
 
           StripVisualizerWidget(
             totalLeds: totalLeds,
+            stripOrientation: ref.watch(lightControlProvider).stripOrientation,
             segments: preset.segments,
             onSegmentsChanged: (newSegs) {
               _updatePreset(preset.copyWith(segments: newSegs));

@@ -31,9 +31,11 @@ class ScannedDevice {
 
 /// Continuous BLE Scanner with deduplication, RSSI updates, and sorted stream.
 class BleScanner {
-  BleScanner({FlutterReactiveBle? ble}) : _ble = ble ?? FlutterReactiveBle();
+  BleScanner({FlutterReactiveBle? ble}) : _customBle = ble;
 
-  final FlutterReactiveBle _ble;
+  final FlutterReactiveBle? _customBle;
+  FlutterReactiveBle? _lazyBle;
+  FlutterReactiveBle get _ble => _customBle ?? (_lazyBle ??= FlutterReactiveBle());
   StreamSubscription<DiscoveredDevice>? _sub;
   final Map<String, ScannedDevice> _devices = {};
   final _controller = StreamController<List<ScannedDevice>>.broadcast();

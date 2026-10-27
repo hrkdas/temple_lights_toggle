@@ -1109,71 +1109,54 @@ class LightsScreen extends ConsumerWidget {
         ],
       ),
       padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.linear_scale_rounded, size: 16, color: AppTheme.amber),
-                  const SizedBox(width: 8),
-                  Text(
-                    'LED STRIP RULER & RANGES',
-                    style: AppTheme.heading(size: 11, color: AppTheme.textMuted, letterSpacing: 1.2),
+      child: StripVisualizerWidget(
+        totalLeds: stripCount,
+        stripOrientation: light.stripOrientation,
+        height: 70,
+        title: 'LED STRIP RULER & RANGES',
+        trailingHeaderAction: hasActiveSegments
+            ? InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () async {
+                  AppHaptics.selection();
+                  await ctrl.setRgb(light.r, light.g, light.b);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                  decoration: BoxDecoration(
+                    color: AppTheme.amber.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
                   ),
-                ],
-              ),
-              if (hasActiveSegments)
-                GestureDetector(
-                  onTap: () async {
-                    AppHaptics.selection();
-                    await ctrl.setRgb(light.r, light.g, light.b);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: AppTheme.amber.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.restart_alt_rounded, size: 12, color: AppTheme.amber),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Reset Full',
-                          style: AppTheme.heading(size: 10, color: AppTheme.amber),
-                        ),
-                      ],
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.restart_alt_rounded, size: 12, color: AppTheme.amber),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Reset Full',
+                        style: AppTheme.heading(size: 10, color: AppTheme.amber),
+                      ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          StripVisualizerWidget(
-            totalLeds: stripCount,
-            height: 70,
-            segments: light.segments.isNotEmpty
-                ? light.segments
-                : [
-                    LedSegment(
-                      start: 0,
-                      count: stripCount,
-                      r: light.r,
-                      g: light.g,
-                      b: light.b,
-                      name: 'Full Strip',
-                    ),
-                  ],
-            onSegmentsChanged: (newSegs) {
-              ctrl.setSegments(newSegs);
-            },
-          ),
-        ],
+              )
+            : null,
+        segments: light.segments.isNotEmpty
+            ? light.segments
+            : [
+                LedSegment(
+                  start: 0,
+                  count: stripCount,
+                  r: light.r,
+                  g: light.g,
+                  b: light.b,
+                  name: 'Full Strip',
+                ),
+              ],
+        onSegmentsChanged: (newSegs) {
+          ctrl.setSegments(newSegs);
+        },
       ),
     );
   }

@@ -29,7 +29,7 @@ class LightBleUuids {
     legacyService,
   ];
   static const String targetDeviceName = 'Temple Lights';
-  static const String bundledFirmwareVersion = '1.3.1';
+  static const String bundledFirmwareVersion = '1.4.0';
 
   static bool isTargetDevice({
     required String name,
@@ -114,17 +114,28 @@ class LightPacketEncoder {
   static Uint8List encodeWifiConnect({
     required String ssid,
     required String psk,
+    int slot = 1,
     bool save = true,
   }) =>
       Uint8List.fromList(utf8.encode(jsonEncode({
         'cmd': 'wifi_connect',
+        'slot': slot,
         'ssid': ssid,
         'psk': psk,
         'save': save,
       })));
 
-  static Uint8List encodeWifiForget() =>
-      Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'wifi_forget'})));
+  static Uint8List encodeWifiForget({int slot = 0}) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'wifi_forget',
+        'slot': slot,
+      })));
+
+  static Uint8List encodeWifiSwitchSlot({required int slot}) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'wifi_switch_slot',
+        'slot': slot,
+      })));
 
   static Uint8List encodeWifiStatus() =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'wifi_status'})));
@@ -231,18 +242,26 @@ class LightPacketEncoder {
     required int leds,
     required int maxCurrentMa,
     int colorOrder = 0,
+    int stripDirection = 0,
   }) =>
       Uint8List.fromList(utf8.encode(jsonEncode({
         'cmd': 'set_hw_config',
         'leds': leds,
         'max_ma': maxCurrentMa,
         'color_order': colorOrder,
+        'strip_dir': stripDirection,
       })));
 
   static Uint8List encodeSetColorOrder(int order) =>
       Uint8List.fromList(utf8.encode(jsonEncode({
         'cmd': 'set_color_order',
         'order': order,
+      })));
+
+  static Uint8List encodeSetStripDirection(int direction) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'set_strip_dir',
+        'dir': direction,
       })));
 
   static Uint8List encodeSetAnimConfig({
@@ -318,6 +337,8 @@ class LightPacketEncoder {
           'b': s.b,
           'bright': s.brightness,
           'fx': s.effect,
+          if (s.stride > 1) 'stride': s.stride,
+          if (s.offset > 0) 'offset': s.offset,
         }).toList(),
       })));
 

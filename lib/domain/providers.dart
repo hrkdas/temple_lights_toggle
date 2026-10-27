@@ -179,6 +179,7 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     int? ledCount,
     int? maxCurrentMa,
     int? colorOrder,
+    int? stripOrientation,
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
@@ -204,6 +205,7 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
               ledCount: ledCount ?? d.ledCount,
               maxCurrentMa: maxCurrentMa ?? d.maxCurrentMa,
               colorOrder: colorOrder ?? d.colorOrder,
+              stripOrientation: stripOrientation ?? d.stripOrientation,
               transitionStyle: transitionStyle ?? d.transitionStyle,
               ambientStyle: ambientStyle ?? d.ambientStyle,
               ambientDepth: ambientDepth ?? d.ambientDepth,
@@ -225,6 +227,28 @@ class PairedDevicesNotifier extends StateNotifier<List<PairedDevice>> {
     state = [
       for (final d in state)
         if (d.id == id) d.copyWith(roomId: roomId) else d,
+    ];
+    await _persist();
+  }
+
+  Future<void> updateHardwareConfig({
+    required String id,
+    required int ledCount,
+    required int maxCurrentMa,
+    required int colorOrder,
+    int? stripOrientation,
+  }) async {
+    state = [
+      for (final d in state)
+        if (d.id == id)
+          d.copyWith(
+            ledCount: ledCount,
+            maxCurrentMa: maxCurrentMa,
+            colorOrder: colorOrder,
+            stripOrientation: stripOrientation ?? d.stripOrientation,
+          )
+        else
+          d,
     ];
     await _persist();
   }
@@ -571,6 +595,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
               final leds = (json['leds'] as num?)?.toInt();
               final maxMa = (json['max_ma'] as num?)?.toInt();
               final colorOrd = (json['color_order'] as num?)?.toInt();
+              final stripDir = (json['strip_dir'] as num?)?.toInt();
               final trans = (json['trans'] as num?)?.toInt();
               final amb = (json['amb'] as num?)?.toInt();
               final depth = (json['depth'] as num?)?.toInt();
@@ -587,6 +612,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     ledCount: leds,
                     maxCurrentMa: maxMa,
                     colorOrder: colorOrd,
+                    stripOrientation: stripDir,
                     transitionStyle: trans,
                     ambientStyle: amb,
                     ambientDepth: depth,
@@ -607,6 +633,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                     ledCount: leds,
                     maxCurrentMa: maxMa,
                     colorOrder: colorOrd,
+                    stripOrientation: stripDir,
                     transitionStyle: trans,
                     ambientStyle: amb,
                     ambientDepth: depth,
@@ -614,23 +641,37 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                   );
             } else if (type == 'rmaker_info') {
               final nodeId = json['node_id'] as String?;
+              final mqttOk = json['mqtt_ok'] as bool? ?? (json['cloud_ok'] as bool? ?? false);
+              final claimed = json['claimed'] as bool? ?? false;
+              final claimState = json['claim_state'] as int? ?? 0;
+              final mapState = json['map_state'] as int? ?? 0;
+
+              _ref.read(lightControlProvider.notifier).updateRainmakerDiagnostics(
+                    mqttConnected: mqttOk,
+                    claimed: claimed,
+                    claimState: claimState,
+                    mapState: mapState,
+                    nodeId: nodeId,
+                  );
+
               if (nodeId != null && nodeId.isNotEmpty) {
-                _ref.read(lightControlProvider.notifier).updateFromHardware(
-                      mode: _ref.read(lightControlProvider).mode,
-                      brightness: _ref.read(lightControlProvider).brightness,
-                      r: _ref.read(lightControlProvider).r,
-                      g: _ref.read(lightControlProvider).g,
-                      b: _ref.read(lightControlProvider).b,
-                      rainmakerNodeId: nodeId,
-                    );
                 _ref.read(pairedDevicesProvider.notifier).updateCachedState(
                       id: deviceId,
                       rainmakerNodeId: nodeId,
                     );
-                // Zero-tap auto-binding if authenticated with Espressif Cloud
+                // Zero-tap auto-binding if authenticated with Espressif Cloud AND device is ready
                 final auth = _ref.read(rainmakerAuthProvider);
                 if (auth.isLoggedIn && !auth.nodes.contains(nodeId)) {
-                  unawaited(_ref.read(rainmakerAuthProvider.notifier).mapActiveDevice(nodeId: nodeId));
+                  if (mqttOk || !json.containsKey('mqtt_ok')) {
+                    unawaited(
+                      _ref.read(rainmakerAuthProvider.notifier)
+                          .mapActiveDevice(nodeId: nodeId)
+                          .catchError((e) {
+                        _log.w('Auto-map device failed: $e');
+                        return false;
+                      }),
+                    );
+                  }
                 }
               }
             } else if (type == 'ota_ack') {
@@ -1226,6 +1267,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
     int? ambientStyle,
     int? ambientDepth,
     int? colorOrder,
+    int? stripOrientation,
     int? activePreset,
     int? activeSegmentCount,
     String? rainmakerNodeId,
@@ -1253,6 +1295,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
       ledCount: ledCount ?? state.ledCount,
       maxCurrentMa: maxCurrentMa ?? state.maxCurrentMa,
       colorOrder: colorOrder ?? state.colorOrder,
+      stripOrientation: stripOrientation ?? state.stripOrientation,
       transitionStyle: transitionStyle ?? state.transitionStyle,
       ambientStyle: ambientStyle ?? state.ambientStyle,
       ambientDepth: ambientDepth ?? state.ambientDepth,
@@ -1261,7 +1304,23 @@ class LightControlNotifier extends StateNotifier<LightState> {
     if (!isOn) {
       _ref.read(autoOffTimerProvider.notifier).onLightsSwitchedOff();
     }
-    _log.i('Lights state updated from hardware: mode=$mode, bright=$brightness, leds=${ledCount ?? state.ledCount}, colorOrder=${colorOrder ?? state.colorOrder}, trans=${transitionStyle ?? state.transitionStyle}, amb=${ambientStyle ?? state.ambientStyle}');
+    _log.i('Lights state updated from hardware: mode=$mode, bright=$brightness, leds=${ledCount ?? state.ledCount}, colorOrder=${colorOrder ?? state.colorOrder}, stripDir=${stripOrientation ?? state.stripOrientation}, trans=${transitionStyle ?? state.transitionStyle}, amb=${ambientStyle ?? state.ambientStyle}');
+  }
+
+  void updateRainmakerDiagnostics({
+    required bool mqttConnected,
+    required bool claimed,
+    required int claimState,
+    required int mapState,
+    String? nodeId,
+  }) {
+    state = state.copyWith(
+      rainmakerMqttConnected: mqttConnected,
+      rainmakerDeviceClaimed: claimed,
+      rainmakerClaimState: claimState,
+      rainmakerMapState: mapState,
+      rainmakerNodeId: nodeId ?? state.rainmakerNodeId,
+    );
   }
 
   void hydrateFromCached(PairedDevice dev) {
@@ -1276,6 +1335,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
       ledCount: dev.effectiveLedCount,
       maxCurrentMa: dev.effectiveMaxCurrentMa,
       colorOrder: dev.effectiveColorOrder,
+      stripOrientation: dev.effectiveStripOrientation,
       transitionStyle: dev.effectiveTransitionStyle,
       ambientStyle: dev.effectiveAmbientStyle,
       ambientDepth: dev.effectiveAmbientDepth,
@@ -1283,25 +1343,61 @@ class LightControlNotifier extends StateNotifier<LightState> {
     );
   }
 
-  Future<void> setHardwareConfig({required int leds, required int maxCurrentMa, int? colorOrder}) async {
+  Future<void> setHardwareConfig({
+    required int leds,
+    required int maxCurrentMa,
+    int? colorOrder,
+    int? stripOrientation,
+  }) async {
     final client = _ref.read(bleClientProvider);
     final order = colorOrder ?? state.colorOrder;
-    state = state.copyWith(ledCount: leds, maxCurrentMa: maxCurrentMa, colorOrder: order);
+    final orientation = stripOrientation ?? state.stripOrientation;
+    state = state.copyWith(
+      ledCount: leds,
+      maxCurrentMa: maxCurrentMa,
+      colorOrder: order,
+      stripOrientation: orientation,
+    );
     if (client.deviceId != null) {
       await _ref.read(pairedDevicesProvider.notifier).updateCachedState(
             id: client.deviceId!,
             ledCount: leds,
             maxCurrentMa: maxCurrentMa,
             colorOrder: order,
+            stripOrientation: orientation,
           );
     }
     if (!client.isConnected) return;
-    final pkt = LightPacketEncoder.encodeSetHwConfig(leds: leds, maxCurrentMa: maxCurrentMa, colorOrder: order);
+    final pkt = LightPacketEncoder.encodeSetHwConfig(
+      leds: leds,
+      maxCurrentMa: maxCurrentMa,
+      colorOrder: order,
+      stripDirection: orientation,
+    );
     try {
       await _dispatchPacket(pkt);
-      _log.i('Dispatched set_hw_config leds=$leds max_ma=$maxCurrentMa color_order=$order to ESP32');
+      _log.i('Dispatched set_hw_config leds=$leds max_ma=$maxCurrentMa color_order=$order strip_dir=$orientation to ESP32');
     } catch (e) {
       _log.w('Failed to dispatch set_hw_config: $e');
+    }
+  }
+
+  Future<void> setStripOrientation(int orientation) async {
+    final client = _ref.read(bleClientProvider);
+    state = state.copyWith(stripOrientation: orientation);
+    if (client.deviceId != null) {
+      await _ref.read(pairedDevicesProvider.notifier).updateCachedState(
+            id: client.deviceId!,
+            stripOrientation: orientation,
+          );
+    }
+    if (!client.isConnected) return;
+    final pkt = LightPacketEncoder.encodeSetStripDirection(orientation);
+    try {
+      await _dispatchPacket(pkt);
+      _log.i('Dispatched set_strip_dir dir=$orientation to ESP32');
+    } catch (e) {
+      _log.w('Failed to dispatch set_strip_dir: $e');
     }
   }
 
@@ -2849,6 +2945,30 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
     final ssid = json['ssid'] as String? ?? state.currentSsid;
     final ip = json['ip'] as String? ?? '';
     final rssi = (json['rssi'] as num?)?.toInt() ?? 0;
+    final activeSlot = (json['active_slot'] as num?)?.toInt() ?? state.activeSlot;
+
+    WifiSlotItem? slot1 = state.slot1;
+    WifiSlotItem? slot2 = state.slot2;
+
+    final rawSlots = json['slots'];
+    if (rawSlots is List) {
+      for (final s in rawSlots) {
+        if (s is Map<String, dynamic>) {
+          final item = WifiSlotItem.fromJson(s);
+          if (item.slot == 1) slot1 = item;
+          if (item.slot == 2) slot2 = item;
+        }
+      }
+    } else if (slot1 == null && ssid.isNotEmpty) {
+      // Backward compatibility fallback for legacy firmware without slots array
+      slot1 = WifiSlotItem(
+        slot: 1,
+        ssid: ssid,
+        isConfigured: true,
+        isActive: stateStr == 'connected',
+        rssi: rssi,
+      );
+    }
 
     WifiPhase phase = WifiPhase.idle;
     switch (stateStr) {
@@ -2873,6 +2993,9 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
       case 'failed':
         phase = WifiPhase.failed;
         break;
+      case 'backoff':
+        phase = WifiPhase.backoff;
+        break;
       case 'disconnected':
         phase = WifiPhase.disconnected;
         break;
@@ -2887,8 +3010,11 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
       rssi: rssi,
       failureReason: reasonStr,
       isScanning: phase == WifiPhase.scanning,
+      activeSlot: activeSlot,
+      slot1: slot1,
+      slot2: slot2,
     );
-    _log.i('WiFi Status updated: $stateStr (reason=$reasonStr, ip=$ip, rssi=$rssi)');
+    _log.i('WiFi Status updated: $stateStr (slot=$activeSlot, reason=$reasonStr, ip=$ip, rssi=$rssi)');
   }
 
   void handleIncomingNtpSynced(Map<String, dynamic> json) {
@@ -2904,6 +3030,8 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
   Future<void> scanNetworks() async {
     final client = _ref.read(bleClientProvider);
     if (!client.isConnected) return;
+    if (state.isScanning) return; // Prevent duplicate concurrent scans
+
     state = state.copyWith(isScanning: true, scannedNetworks: []);
     final settings = _ref.read(settingsProvider);
     final pkt = LightPacketEncoder.encodeWifiScan();
@@ -2923,6 +3051,7 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
   Future<void> connect({
     required String ssid,
     required String psk,
+    int slot = 1,
     bool save = true,
   }) async {
     final client = _ref.read(bleClientProvider);
@@ -2930,12 +3059,14 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
     state = state.copyWith(
       phase: WifiPhase.connecting,
       currentSsid: ssid,
+      activeSlot: slot,
       failureReason: 'none',
     );
     final settings = _ref.read(settingsProvider);
     final pkt = LightPacketEncoder.encodeWifiConnect(
       ssid: ssid,
       psk: psk,
+      slot: slot,
       save: save,
     );
     try {
@@ -2944,26 +3075,59 @@ class WifiNotifier extends StateNotifier<WifiConnectionState> {
         serviceUuid: settings.customServiceUuid,
         charUuid: settings.customCharUuid,
       );
-      _log.i('Sent wifi_connect command for $ssid');
+      _log.i('Sent wifi_connect command for Slot $slot ($ssid)');
     } catch (e) {
       _log.w('Failed to send wifi_connect: $e');
       state = state.copyWith(phase: WifiPhase.failed, failureReason: e.toString());
     }
   }
 
-  Future<void> forget() async {
+  Future<void> switchSlot(int slot) async {
     final client = _ref.read(bleClientProvider);
     if (!client.isConnected) return;
     final settings = _ref.read(settingsProvider);
-    final pkt = LightPacketEncoder.encodeWifiForget();
+    final pkt = LightPacketEncoder.encodeWifiSwitchSlot(slot: slot);
     try {
       await client.writeWithoutResponse(
         pkt,
         serviceUuid: settings.customServiceUuid,
         charUuid: settings.customCharUuid,
       );
-      state = WifiConnectionState.idle;
-      _log.i('Sent wifi_forget command');
+      state = state.copyWith(
+        phase: WifiPhase.connecting,
+        activeSlot: slot,
+      );
+      _log.i('Sent wifi_switch_slot command for Slot $slot');
+    } catch (e) {
+      _log.w('Failed to send wifi_switch_slot: $e');
+    }
+  }
+
+  Future<void> forget({int slot = 0}) async {
+    final client = _ref.read(bleClientProvider);
+    if (!client.isConnected) return;
+    final settings = _ref.read(settingsProvider);
+    final pkt = LightPacketEncoder.encodeWifiForget(slot: slot);
+    try {
+      await client.writeWithoutResponse(
+        pkt,
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      if (slot == 0) {
+        state = WifiConnectionState.idle;
+      } else if (slot == 1) {
+        state = state.copyWith(
+          slot1: const WifiSlotItem(slot: 1, ssid: '', isConfigured: false, isActive: false),
+          activeSlot: state.hasSlot2 ? 2 : 0,
+        );
+      } else if (slot == 2) {
+        state = state.copyWith(
+          slot2: const WifiSlotItem(slot: 2, ssid: '', isConfigured: false, isActive: false),
+          activeSlot: state.hasSlot1 ? 1 : 0,
+        );
+      }
+      _log.i('Sent wifi_forget command for slot $slot');
     } catch (e) {
       _log.w('Failed to send wifi_forget: $e');
     }
@@ -3163,11 +3327,15 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
       await refreshNodes();
 
       // Zero-tap Auto-Binding: If an active light is connected with a known nodeId, bind it automatically!
-      final activeDev = _ref.read(activeDeviceProvider);
-      final light = _ref.read(lightControlProvider);
-      final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
-      if (targetNodeId != null && targetNodeId.isNotEmpty) {
-        await mapActiveDevice(nodeId: targetNodeId);
+      try {
+        final activeDev = _ref.read(activeDeviceProvider);
+        final light = _ref.read(lightControlProvider);
+        final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
+        if (targetNodeId != null && targetNodeId.isNotEmpty) {
+          await mapActiveDevice(nodeId: targetNodeId);
+        }
+      } catch (e) {
+        _log.d('Device auto-binding skipped: $e');
       }
 
       return true;
@@ -3207,11 +3375,15 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
       await refreshNodes();
 
       // Zero-tap Auto-Binding: Bind active device if known
-      final activeDev = _ref.read(activeDeviceProvider);
-      final light = _ref.read(lightControlProvider);
-      final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
-      if (targetNodeId != null && targetNodeId.isNotEmpty) {
-        await mapActiveDevice(nodeId: targetNodeId);
+      try {
+        final activeDev = _ref.read(activeDeviceProvider);
+        final light = _ref.read(lightControlProvider);
+        final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
+        if (targetNodeId != null && targetNodeId.isNotEmpty) {
+          await mapActiveDevice(nodeId: targetNodeId);
+        }
+      } catch (e) {
+        _log.d('Device auto-binding skipped: $e');
       }
 
       return true;
@@ -3271,25 +3443,29 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
         : RainmakerCloudService.generateSecretKey();
 
     // 1. Send rmaker_map_user over BLE to ESP32 node if connected
-    final bleClient = _ref.read(bleClientProvider);
-    if (bleClient.isConnected) {
-      final settings = _ref.read(settingsProvider);
-      final pkt = LightPacketEncoder.encodeRmakerMapUser(
-        userId: uid,
-        secretKey: actualSecretKey,
-      );
-      try {
-        await bleClient.writeWithoutResponse(
-          pkt,
-          serviceUuid: settings.customServiceUuid,
-          charUuid: settings.customCharUuid,
+    try {
+      final bleClient = _ref.read(bleClientProvider);
+      if (bleClient.isConnected) {
+        final settings = _ref.read(settingsProvider);
+        final pkt = LightPacketEncoder.encodeRmakerMapUser(
+          userId: uid,
+          secretKey: actualSecretKey,
         );
-        _log.i('Dispatched rmaker_map_user BLE packet to node (uid: $uid)');
-        // Give ESP32 a brief window to push MQTT user mapping packet to AWS IoT
-        await Future<void>.delayed(const Duration(milliseconds: 600));
-      } catch (e) {
-        _log.w('Failed to write rmaker_map_user over BLE: $e');
+        try {
+          await bleClient.writeWithoutResponse(
+            pkt,
+            serviceUuid: settings.customServiceUuid,
+            charUuid: settings.customCharUuid,
+          );
+          _log.i('Dispatched rmaker_map_user BLE packet to node (uid: $uid)');
+          // Give ESP32 a brief window to push MQTT user mapping packet to AWS IoT
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+        } catch (e) {
+          _log.w('Failed to write rmaker_map_user over BLE: $e');
+        }
       }
+    } catch (e) {
+      _log.d('BLE write skipped (not connected or in test mode): $e');
     }
 
     // 2. Call RainMaker Cloud PUT /v1/user/nodes/mapping with matching secret key
@@ -3318,13 +3494,19 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
     state = state.copyWith(isLoading: false);
     if (success) {
       await refreshNodes();
+      final isVerifiedInCloud = state.nodes.contains(nodeId);
       final activeDev = _ref.read(activeDeviceProvider);
       if (activeDev != null) {
         final updated = activeDev.copyWith(
-          isGoogleHomeLinked: true,
+          isGoogleHomeLinked: isVerifiedInCloud,
           rainmakerNodeId: nodeId,
         );
         _ref.read(pairedDevicesProvider.notifier).upsertDevice(updated);
+      }
+      if (!isVerifiedInCloud) {
+        state = state.copyWith(
+          errorMessage: 'Device mapped with cloud API, but awaiting confirmation. Verify device is claimed and MQTT is connected.',
+        );
       }
       return true;
     } else {

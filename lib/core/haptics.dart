@@ -21,6 +21,14 @@ class AppHaptics {
   static Future<void> warn() async {
     for (var i = 0; i < 2; i++) { HapticFeedback.heavyImpact(); await Future.delayed(const Duration(milliseconds: 100)); }
   }
+  static Future<void> warning() async => warn();
+  static Future<void> heavy() async {
+    if (await _canRich()) {
+      hf.Haptics.vibrate(hf.HapticsType.heavy);
+    } else {
+      HapticFeedback.heavyImpact();
+    }
+  }
   static Future<void> light() async => tap();
   static Future<void> medium() async => toggle();
   static Future<void> error() async => warn();

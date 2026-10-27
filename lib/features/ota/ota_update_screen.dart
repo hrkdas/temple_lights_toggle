@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,8 +25,11 @@ class OtaUpdateScreen extends ConsumerStatefulWidget {
 }
 
 class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _pulseController;
+  late final AnimationController _stripAnimController;
+  int? _hoveredLedIndex;
+  double? _touchProgressFraction;
 
   @override
   void initState() {
@@ -34,11 +38,17 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
       vsync: this,
       duration: const Duration(milliseconds: 2200),
     )..repeat(reverse: true);
+
+    _stripAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3200),
+    )..repeat();
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _stripAnimController.dispose();
     super.dispose();
   }
 
@@ -99,6 +109,10 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
                 textAlign: TextAlign.center,
                 style: AppTheme.body(size: 13, color: AppTheme.textSecondary),
               ),
+              const SizedBox(height: 24),
+
+              // Interactive End-to-End RGB Strip Light Progress
+              _buildInteractiveStripCard(otaState, activeDevice),
               const SizedBox(height: 24),
 
               // Metrics Dashboard (Speed, ETA, Size)
@@ -604,5 +618,402 @@ class _OtaUpdateScreenState extends ConsumerState<OtaUpdateScreen>
         ],
       ),
     );
+  }
+
+  Widget _buildInteractiveStripCard(OtaProgressState ota, PairedDevice? activeDevice) {
+    final totalLeds = activeDevice?.effectiveLedCount ?? 150;
+    final isUpdating = ota.isInProgress;
+    final isCompleted = ota.phase == OtaPhase.completed;
+    final isFailed = ota.phase == OtaPhase.failed;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isCompleted
+              ? AppTheme.green.withValues(alpha: 0.5)
+              : isFailed
+                  ? AppTheme.red.withValues(alpha: 0.4)
+                  : (isUpdating ? AppTheme.amber.withValues(alpha: 0.45) : AppTheme.border),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: (isCompleted
+                    ? AppTheme.green
+                    : (isUpdating ? AppTheme.amber : Colors.black))
+                .withValues(alpha: isUpdating ? 0.08 : 0.03),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Row: Title & Real-Time Sync Indicator
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.linear_scale_rounded,
+                    size: 16,
+                    color: isCompleted
+                        ? AppTheme.green
+                        : (isFailed ? AppTheme.red : AppTheme.amber),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'INTERACTIVE RGB STRIP LIGHT',
+                    style: AppTheme.mono(size: 11, color: AppTheme.textPrimary, weight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (isCompleted
+                          ? AppTheme.green
+                          : (isUpdating ? AppTheme.amber : AppTheme.border))
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: (isCompleted
+                            ? AppTheme.green
+                            : (isUpdating ? AppTheme.amber : AppTheme.border))
+                        .withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isCompleted
+                            ? AppTheme.green
+                            : (isFailed ? AppTheme.red : (isUpdating ? AppTheme.amber : AppTheme.textMuted)),
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      isCompleted
+                          ? 'BOOTED'
+                          : (isUpdating ? 'END-TO-END FLOW' : 'HARDWARE SYNC'),
+                      style: AppTheme.mono(
+                        size: 9.5,
+                        color: isCompleted
+                            ? AppTheme.green
+                            : (isFailed ? AppTheme.red : (isUpdating ? AppTheme.amber : AppTheme.textMuted)),
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Strip Ruler Indices (Start / Current Sector / End)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'PIN 4 • LED 1',
+                style: AppTheme.mono(size: 9.5, color: AppTheme.textMuted),
+              ),
+              Text(
+                'SECTOR: ${(ota.progress * totalLeds).floor()} / $totalLeds LEDS',
+                style: AppTheme.mono(
+                  size: 9.5,
+                  color: isCompleted ? AppTheme.green : AppTheme.amber,
+                  weight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'LED $totalLeds (${activeDevice?.formattedLength ?? "2.5m"})',
+                style: AppTheme.mono(size: 9.5, color: AppTheme.textMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Interactive Animated Canvas Strip
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              return GestureDetector(
+                key: const Key('ota_strip_gesture_detector'),
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: (details) => _handleStripTouch(details.localPosition.dx, width, totalLeds),
+                onHorizontalDragUpdate: (details) => _handleStripTouch(details.localPosition.dx, width, totalLeds),
+                onHorizontalDragEnd: (_) => setState(() {
+                  _hoveredLedIndex = null;
+                  _touchProgressFraction = null;
+                }),
+                onTapDown: (details) => _handleStripTouch(details.localPosition.dx, width, totalLeds),
+                child: Container(
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF101216),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.border.withValues(alpha: 0.6)),
+                  ),
+                  child: AnimatedBuilder(
+                    animation: _stripAnimController,
+                    builder: (context, _) {
+                      return CustomPaint(
+                        size: Size(width, 52),
+                        painter: _OtaStripCanvasPainter(
+                          progress: ota.progress,
+                          phase: ota.phase,
+                          animValue: _stripAnimController.value,
+                          totalLeds: totalLeds,
+                          touchFraction: _touchProgressFraction,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+
+          // Interactive Touch Readout or Color Legend
+          if (_hoveredLedIndex != null && _touchProgressFraction != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.amber.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.amber.withValues(alpha: 0.2)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'INSPECTING: LED #$_hoveredLedIndex',
+                    style: AppTheme.mono(size: 10, color: AppTheme.amber, weight: FontWeight.w700),
+                  ),
+                  Text(
+                    '${(_touchProgressFraction! * 100).toStringAsFixed(0)}% • ${_touchProgressFraction! <= ota.progress ? "WRITTEN (FLASH SECURED)" : "PENDING GUIDE"}',
+                    style: AppTheme.mono(
+                      size: 10,
+                      color: _touchProgressFraction! <= ota.progress ? AppTheme.amber : AppTheme.textMuted,
+                      weight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildLegendItem(const Color(0xFFFF9E22), 'Written Flash'),
+                _buildLegendItem(Colors.white, 'Active Spark Head'),
+                _buildLegendItem(const Color(0xFF323B54), 'Pending Guide Track'),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _handleStripTouch(double localX, double width, int totalLeds) {
+    const margin = 12.0;
+    final usableW = width - (margin * 2);
+    if (usableW <= 0) return;
+    final rawFrac = ((localX - margin) / usableW).clamp(0.0, 1.0);
+    final led = 1 + (rawFrac * (totalLeds - 1)).round();
+    if (led != _hoveredLedIndex) {
+      AppHaptics.selection();
+    }
+    setState(() {
+      _hoveredLedIndex = led;
+      _touchProgressFraction = rawFrac;
+    });
+  }
+
+  Widget _buildLegendItem(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color,
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.5),
+                blurRadius: 3,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: AppTheme.mono(size: 9.5, color: AppTheme.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+class _OtaStripCanvasPainter extends CustomPainter {
+  _OtaStripCanvasPainter({
+    required this.progress,
+    required this.phase,
+    required this.animValue,
+    required this.totalLeds,
+    this.touchFraction,
+  });
+
+  final double progress;
+  final OtaPhase phase;
+  final double animValue;
+  final int totalLeds;
+  final double? touchFraction;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const margin = 12.0;
+    final trackW = size.width - (margin * 2);
+    final centerY = size.height / 2;
+
+    // 1. Metallic ribbon trace behind diodes
+    final trackPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.05)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(Offset(margin, centerY), Offset(size.width - margin, centerY), trackPaint);
+
+    final diodeCount = math.min(totalLeds, 48);
+    if (diodeCount <= 1) return;
+
+    final isSuccess = phase == OtaPhase.completed || phase == OtaPhase.rebooting;
+    final isFailed = phase == OtaPhase.failed;
+
+    for (int i = 0; i < diodeCount; i++) {
+      final diodeFrac = i / (diodeCount - 1);
+      final x = margin + diodeFrac * trackW;
+
+      if (isSuccess) {
+        // Triumphant Emerald-Gold Bloom wave across all diodes
+        final centerNorm = (diodeFrac - 0.5).abs() * 2.0;
+        final waveVal = (math.sin((animValue * 3.0 - centerNorm * 1.5) * math.pi) * 0.5 + 0.5);
+        final diodeColor = Color.lerp(
+          const Color(0xFF22C55E),
+          const Color(0xFFFFD54F),
+          waveVal,
+        )!;
+
+        final glowPaint = Paint()
+          ..color = diodeColor.withValues(alpha: 0.45)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5.0);
+        canvas.drawCircle(Offset(x, centerY), 4.5, glowPaint);
+
+        final corePaint = Paint()..color = diodeColor;
+        canvas.drawCircle(Offset(x, centerY), 2.8, corePaint);
+
+        final specPaint = Paint()..color = Colors.white.withValues(alpha: 0.85);
+        canvas.drawCircle(Offset(x, centerY), 1.2, specPaint);
+        continue;
+      }
+
+      if (isFailed) {
+        // Warning pulse in coral red
+        final pulse = 0.5 + 0.5 * math.sin(animValue * 4 * math.pi);
+        final diodeColor = const Color(0xFFEF4444).withValues(alpha: 0.2 + 0.6 * pulse);
+        final corePaint = Paint()..color = diodeColor;
+        canvas.drawCircle(Offset(x, centerY), 2.5, corePaint);
+        continue;
+      }
+
+      final dist = (diodeFrac - progress) * (diodeCount - 1);
+
+      if (dist < -1.5) {
+        // Written Diode (Behind Active Head): Sacred Amber-Gold with gentle breath
+        final breath = 0.82 + 0.18 * math.sin(animValue * 2 * math.pi * 2 + (i * 0.25));
+        final baseColor = const Color(0xFFFF9E22);
+        final effColor = baseColor.withValues(alpha: breath.clamp(0.0, 1.0));
+
+        final glowPaint = Paint()
+          ..color = effColor.withValues(alpha: 0.35)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
+        canvas.drawCircle(Offset(x, centerY), 4.5, glowPaint);
+
+        final diodePaint = Paint()..color = effColor;
+        canvas.drawCircle(Offset(x, centerY), 2.8, diodePaint);
+
+        final specPaint = Paint()..color = Colors.white.withValues(alpha: 0.65 * breath);
+        canvas.drawCircle(Offset(x, centerY), 1.1, specPaint);
+      } else if (dist > 1.5) {
+        // Unwritten Diode (Guide Track Ahead): Deep dusk indigo with starlight shimmer
+        final shimmer = 0.5 + 0.5 * math.sin(animValue * 2 * math.pi * 3 - (i * 0.35));
+        final trackColor = Color.lerp(
+          const Color(0xFF1B202E),
+          const Color(0xFF38446B),
+          shimmer,
+        )!;
+
+        final diodePaint = Paint()..color = trackColor;
+        canvas.drawCircle(Offset(x, centerY), 2.2, diodePaint);
+      } else {
+        // Active Flash Head / Spark Diode (|dist| <= 1.5)
+        final headFactor = (1.0 - (dist.abs() / 1.5)).clamp(0.0, 1.0);
+        final pulse = 0.80 + 0.20 * math.sin(animValue * 8 * math.pi);
+
+        final haloPaint = Paint()
+          ..color = const Color(0xFFFFB300).withValues(alpha: 0.75 * headFactor * pulse)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6.5);
+        canvas.drawCircle(Offset(x, centerY), 6.5, haloPaint);
+
+        final sparkColor = Color.lerp(
+          const Color(0xFFFF9E22),
+          const Color(0xFFFFFFFF),
+          headFactor * pulse,
+        )!;
+        final sparkPaint = Paint()..color = sparkColor;
+        canvas.drawCircle(Offset(x, centerY), 3.4, sparkPaint);
+
+        final specPaint = Paint()..color = Colors.white;
+        canvas.drawCircle(Offset(x, centerY), 1.5, specPaint);
+      }
+    }
+
+    // Touch inspection crosshair & indicator needle
+    if (touchFraction != null) {
+      final touchX = margin + touchFraction! * trackW;
+      final touchPaint = Paint()
+        ..color = AppTheme.amber.withValues(alpha: 0.8)
+        ..strokeWidth = 1.5;
+      canvas.drawLine(Offset(touchX, 6), Offset(touchX, size.height - 6), touchPaint);
+
+      final needleCircle = Paint()..color = AppTheme.amber;
+      canvas.drawCircle(Offset(touchX, centerY), 4.5, needleCircle);
+
+      final needleHole = Paint()..color = const Color(0xFF101216);
+      canvas.drawCircle(Offset(touchX, centerY), 2.0, needleHole);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _OtaStripCanvasPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.phase != phase ||
+        oldDelegate.animValue != animValue ||
+        oldDelegate.touchFraction != touchFraction;
   }
 }

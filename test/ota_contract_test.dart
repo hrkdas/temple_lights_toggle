@@ -1,9 +1,15 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:temple_lights_toggle/contract/light_contract.dart';
 import 'package:temple_lights_toggle/contract/ota_constants.dart';
+import 'package:temple_lights_toggle/core/kv_store.dart';
 import 'package:temple_lights_toggle/domain/models.dart';
+import 'package:temple_lights_toggle/domain/providers.dart';
+import 'package:temple_lights_toggle/features/ota/ota_update_screen.dart';
 
 void main() {
   group('Temple Lights OTA Contract & Packet Encoder Tests', () {
@@ -208,6 +214,92 @@ void main() {
 
       final resolved = OtaConstants.resolveOtaUuids(discoveredServices: services);
       expect(resolved, isNull);
+    });
+  });
+
+  group('Interactive RGB Strip Light OTA Progress Tests', () {
+    testWidgets('OtaUpdateScreen renders Interactive RGB Strip Light Card with full ruler boundaries', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = await KvStore.instance();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            kvStoreProvider.overrideWithValue(kv),
+          ],
+          child: const MaterialApp(
+            home: OtaUpdateScreen(),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('INTERACTIVE RGB STRIP LIGHT'), findsOneWidget);
+      expect(find.text('PIN 4 • LED 1'), findsOneWidget);
+      expect(find.text('HARDWARE SYNC'), findsOneWidget);
+      expect(find.text('Written Flash'), findsOneWidget);
+      expect(find.text('Active Spark Head'), findsOneWidget);
+      expect(find.text('Pending Guide Track'), findsOneWidget);
+    });
+
+    testWidgets('Interactive RGB Strip responds to drag and tap gestures with inspection readout', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = await KvStore.instance();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            kvStoreProvider.overrideWithValue(kv),
+          ],
+          child: const MaterialApp(
+            home: OtaUpdateScreen(),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final stripFinder = find.byKey(const Key('ota_strip_gesture_detector'));
+      expect(stripFinder, findsOneWidget);
+
+      // Tap on the strip canvas
+      await tester.tap(stripFinder);
+      await tester.pump();
+
+      // Inspection text should appear
+      expect(find.textContaining('INSPECTING: LED #'), findsOneWidget);
+    });
+
+    testWidgets('Interactive RGB Strip updates status badge when OTA completes', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = await KvStore.instance();
+
+      final container = ProviderContainer(
+        overrides: [
+          kvStoreProvider.overrideWithValue(kv),
+        ],
+      );
+      container.read(otaProgressProvider.notifier).state = const OtaProgressState(
+        phase: OtaPhase.completed,
+        bytesWritten: 500000,
+        totalBytes: 500000,
+      );
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: OtaUpdateScreen(),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('INTERACTIVE RGB STRIP LIGHT'), findsOneWidget);
+      expect(find.text('BOOTED'), findsOneWidget);
+      expect(find.text('SUCCESS'), findsOneWidget);
     });
   });
 }

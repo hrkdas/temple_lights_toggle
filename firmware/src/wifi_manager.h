@@ -16,7 +16,8 @@ enum WifiState : uint8_t {
     TL_WIFI_STATE_SAVED = 5,
     TL_WIFI_STATE_CONNECTED = 6,
     TL_WIFI_STATE_FAILED = 7,
-    TL_WIFI_STATE_DISCONNECTED = 8
+    TL_WIFI_STATE_DISCONNECTED = 8,
+    TL_WIFI_STATE_BACKOFF = 9
 };
 
 enum WifiReason : uint8_t {
@@ -35,8 +36,10 @@ void wifiManagerTick(unsigned long nowMs);
 
 // BLE Command Operations
 void wifiManagerStartScan();
+void wifiManagerConnect(uint8_t slot, const String& ssid, const String& psk, bool saveOnSuccess);
 void wifiManagerConnect(const String& ssid, const String& psk, bool saveOnSuccess);
-void wifiManagerForget();
+void wifiManagerForget(uint8_t slot = 0);
+void wifiManagerSwitchSlot(uint8_t slot);
 void wifiManagerQueryStatus();
 void wifiManagerTriggerNtp();
 void wifiManagerSetTimezoneOffset(int16_t tzOffsetMin);
@@ -50,6 +53,9 @@ WifiState wifiManagerGetState();
 String wifiManagerGetSsid();
 String wifiManagerGetIp();
 int8_t wifiManagerGetRssi();
+uint8_t wifiManagerGetActiveSlot();
+String wifiManagerGetSlotSsid(uint8_t slot);
+bool wifiManagerIsSlotConfigured(uint8_t slot);
 
 // OTA Gating
 void wifiManagerPauseForOta();

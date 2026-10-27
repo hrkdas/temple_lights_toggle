@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 enum ConnPhase {
@@ -96,6 +97,8 @@ class LedSegment {
     this.brightness = 255,
     this.effect = 0, // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Ember, 5=Aurora, 6=Rainbow
     this.speed = 5,
+    this.stride = 1,
+    this.offset = 0,
     this.name,
   });
 
@@ -107,15 +110,44 @@ class LedSegment {
   final int brightness;
   final int effect;
   final int speed;
+  final int stride;
+  final int offset;
   final String? name;
 
   int get end => (start + count - 1).clamp(start, 65535);
 
   Color get color => Color.fromARGB(255, r, g, b);
 
-  String get displayName => (name != null && name!.trim().isNotEmpty)
-      ? name!.trim()
-      : 'LEDs #${start + 1}–#${end + 1}';
+  String get displayName {
+    if (name != null && name!.trim().isNotEmpty) {
+      return name!.trim();
+    }
+    if (stride == 2) {
+      return offset == 0 ? 'Odd LEDs (#1, #3...)' : 'Even LEDs (#2, #4...)';
+    }
+    return 'LEDs #${start + 1}–#${end + 1}';
+  }
+
+  bool get isAlternateOdd => stride == 2 && offset == 0;
+  bool get isAlternateEven => stride == 2 && offset == 1;
+  bool get isAlternate => stride > 1;
+
+  bool containsLed(int ledIndex) {
+    if (ledIndex < start || ledIndex > end) return false;
+    if (stride <= 1) return true;
+    return ((ledIndex - start) % stride) == offset;
+  }
+
+  bool overlaps(LedSegment other) {
+    if (math.max(start, other.start) > math.min(end, other.end)) {
+      return false;
+    }
+    // Strided non-interfering phases (e.g. odd vs even on the same range)
+    if (stride > 1 && other.stride == stride && offset != other.offset) {
+      return false;
+    }
+    return true;
+  }
 
   String get effectName {
     switch (effect) {
@@ -147,6 +179,8 @@ class LedSegment {
     int? brightness,
     int? effect,
     int? speed,
+    int? stride,
+    int? offset,
     String? name,
   }) =>
       LedSegment(
@@ -158,6 +192,8 @@ class LedSegment {
         brightness: brightness ?? this.brightness,
         effect: effect ?? this.effect,
         speed: speed ?? this.speed,
+        stride: stride ?? this.stride,
+        offset: offset ?? this.offset,
         name: name ?? this.name,
       );
 
@@ -170,19 +206,127 @@ class LedSegment {
         'bright': brightness,
         'fx': effect,
         'spd': speed,
+        if (stride > 1) 'stride': stride,
+        if (offset > 0) 'offset': offset,
         if (name != null && name!.isNotEmpty) 'name': name,
       };
 
   factory LedSegment.fromJson(Map<String, dynamic> json) => LedSegment(
-        start: (json['start'] as num?)?.toInt() ?? 0,
-        count: (json['count'] as num?)?.toInt() ?? 1,
-        r: (json['r'] as num?)?.toInt() ?? 255,
-        g: (json['g'] as num?)?.toInt() ?? 147,
-        b: (json['b'] as num?)?.toInt() ?? 41,
-        brightness: (json['bright'] as num?)?.toInt() ?? 255,
-        effect: (json['fx'] as num?)?.toInt() ?? 0,
-        speed: (json['spd'] as num?)?.toInt() ?? 5,
+        start: ((json['start'] as num?)?.toInt() ?? 0).clamp(0, 65535),
+        count: math.max(1, ((json['count'] as num?)?.toInt() ?? 1)),
+        r: ((json['r'] as num?)?.toInt() ?? 255).clamp(0, 255),
+        g: ((json['g'] as num?)?.toInt() ?? 147).clamp(0, 255),
+        b: ((json['b'] as num?)?.toInt() ?? 41).clamp(0, 255),
+        brightness: ((json['bright'] as num?)?.toInt() ?? 255).clamp(0, 255),
+        effect: ((json['fx'] as num?)?.toInt() ?? 0).clamp(0, 6),
+        speed: ((json['spd'] as num?)?.toInt() ?? 5).clamp(1, 10),
+        stride: math.max(1, ((json['stride'] as num?)?.toInt() ?? 1)),
+        offset: math.max(0, ((json['offset'] as num?)?.toInt() ?? 0)),
         name: json['name'] as String?,
+      );
+
+  factory LedSegment.allLeds({
+    required int totalLeds,
+    int r = 255,
+    int g = 147,
+    int b = 41,
+    int brightness = 255,
+    int effect = 0,
+    int speed = 5,
+    String? name,
+  }) =>
+      LedSegment(
+        start: 0,
+        count: totalLeds,
+        r: r,
+        g: g,
+        b: b,
+        brightness: brightness,
+        effect: effect,
+        speed: speed,
+        stride: 1,
+        offset: 0,
+        name: name ?? 'Full Strip',
+      );
+
+  factory LedSegment.alternateOdd({
+    required int totalLeds,
+    int r = 255,
+    int g = 147,
+    int b = 41,
+    int brightness = 255,
+    int effect = 0,
+    int speed = 5,
+    String? name,
+  }) =>
+      LedSegment(
+        start: 0,
+        count: totalLeds,
+        r: r,
+        g: g,
+        b: b,
+        brightness: brightness,
+        effect: effect,
+        speed: speed,
+        stride: 2,
+        offset: 0,
+        name: name ?? 'Odd LEDs (#1, #3...)',
+      );
+
+  factory LedSegment.alternateEven({
+    required int totalLeds,
+    int r = 255,
+    int g = 180,
+    int b = 0,
+    int brightness = 255,
+    int effect = 0,
+    int speed = 5,
+    String? name,
+  }) =>
+      LedSegment(
+        start: 0,
+        count: totalLeds,
+        r: r,
+        g: g,
+        b: b,
+        brightness: brightness,
+        effect: effect,
+        speed: speed,
+        stride: 2,
+        offset: 1,
+        name: name ?? 'Even LEDs (#2, #4...)',
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LedSegment &&
+          runtimeType == other.runtimeType &&
+          start == other.start &&
+          count == other.count &&
+          r == other.r &&
+          g == other.g &&
+          b == other.b &&
+          brightness == other.brightness &&
+          effect == other.effect &&
+          speed == other.speed &&
+          stride == other.stride &&
+          offset == other.offset &&
+          name == other.name;
+
+  @override
+  int get hashCode => Object.hash(
+        start,
+        count,
+        r,
+        g,
+        b,
+        brightness,
+        effect,
+        speed,
+        stride,
+        offset,
+        name,
       );
 }
 
@@ -200,6 +344,7 @@ class LightState {
     this.ledCount = 150,
     this.maxCurrentMa = 3000,
     this.colorOrder = 0,
+    this.stripOrientation = 0,
     this.transitionStyle = 0,
     this.ambientStyle = 1,
     this.ambientDepth = 6,
@@ -207,6 +352,10 @@ class LightState {
     this.cycleFlags = 0x07,
     this.segments = const [],
     this.rainmakerNodeId,
+    this.rainmakerMqttConnected = false,
+    this.rainmakerDeviceClaimed = false,
+    this.rainmakerClaimState = 0,
+    this.rainmakerMapState = 0,
   });
 
   final bool isOn;
@@ -219,6 +368,7 @@ class LightState {
   final int ledCount;
   final int maxCurrentMa;
   final int colorOrder;      // 0=RGB (Hardware Default: Direct Red-Green-Blue), 1=GRB (WS2812B), 2=BRG, 3=BGR
+  final int stripOrientation; // 0=Left-to-Right (Standard), 1=Right-to-Left (Inverted)
   final int transitionStyle; // 0=Center-Out, 1=Sunrise, 2=Sunset, 3=Convergence, 4=Sparkle, 5=Domino, 6=Fade
   final int ambientStyle;    // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Embers, 5=Aurora, 6=Rainbow
   final int ambientDepth;
@@ -226,6 +376,10 @@ class LightState {
   final int cycleFlags;
   final List<LedSegment> segments;
   final String? rainmakerNodeId;
+  final bool rainmakerMqttConnected;
+  final bool rainmakerDeviceClaimed;
+  final int rainmakerClaimState;
+  final int rainmakerMapState;
 
   static const List<String> colorOrderNames = [
     'RGB (Standard / Default)',
@@ -234,10 +388,20 @@ class LightState {
     'BGR',
   ];
 
+  static const List<String> orientationNames = [
+    'Left to Right (Standard)',
+    'Right to Left (Inverted)',
+  ];
+
   String get colorOrderName =>
       (colorOrder >= 0 && colorOrder < colorOrderNames.length)
           ? colorOrderNames[colorOrder]
           : colorOrderNames[0];
+
+  String get orientationName =>
+      (stripOrientation >= 0 && stripOrientation < orientationNames.length)
+          ? orientationNames[stripOrientation]
+          : orientationNames[0];
 
   bool get isOff => !isOn || brightness == 0;
 
@@ -308,6 +472,7 @@ class LightState {
     int? ledCount,
     int? maxCurrentMa,
     int? colorOrder,
+    int? stripOrientation,
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
@@ -315,6 +480,10 @@ class LightState {
     int? cycleFlags,
     List<LedSegment>? segments,
     String? rainmakerNodeId,
+    bool? rainmakerMqttConnected,
+    bool? rainmakerDeviceClaimed,
+    int? rainmakerClaimState,
+    int? rainmakerMapState,
   }) =>
       LightState(
         isOn: isOn ?? this.isOn,
@@ -329,6 +498,7 @@ class LightState {
         ledCount: ledCount ?? this.ledCount,
         maxCurrentMa: maxCurrentMa ?? this.maxCurrentMa,
         colorOrder: colorOrder ?? this.colorOrder,
+        stripOrientation: stripOrientation ?? this.stripOrientation,
         transitionStyle: transitionStyle ?? this.transitionStyle,
         ambientStyle: ambientStyle ?? this.ambientStyle,
         ambientDepth: ambientDepth ?? this.ambientDepth,
@@ -336,6 +506,10 @@ class LightState {
         cycleFlags: cycleFlags ?? this.cycleFlags,
         segments: segments ?? this.segments,
         rainmakerNodeId: rainmakerNodeId ?? this.rainmakerNodeId,
+        rainmakerMqttConnected: rainmakerMqttConnected ?? this.rainmakerMqttConnected,
+        rainmakerDeviceClaimed: rainmakerDeviceClaimed ?? this.rainmakerDeviceClaimed,
+        rainmakerClaimState: rainmakerClaimState ?? this.rainmakerClaimState,
+        rainmakerMapState: rainmakerMapState ?? this.rainmakerMapState,
       );
 
   static const idle = LightState();
@@ -364,7 +538,7 @@ class OtaProgressState {
     this.statusMessage = 'Ready',
     this.errorMessage,
     this.deviceFirmwareVersion,
-    this.bundledFirmwareVersion = '1.3.1',
+    this.bundledFirmwareVersion = '1.4.0',
     this.isCompleted = false,
   });
 
@@ -509,6 +683,7 @@ class PairedDevice {
     this.ledCount,
     this.maxCurrentMa,
     this.colorOrder,
+    this.stripOrientation,
     this.transitionStyle,
     this.ambientStyle,
     this.ambientDepth,
@@ -533,6 +708,7 @@ class PairedDevice {
   int? ledCount;
   int? maxCurrentMa;
   int? colorOrder;
+  int? stripOrientation;
   int? transitionStyle;
   int? ambientStyle;
   int? ambientDepth;
@@ -552,6 +728,7 @@ class PairedDevice {
   int get effectiveLedCount => ledCount ?? 150;
   int get effectiveMaxCurrentMa => maxCurrentMa ?? 3000;
   int get effectiveColorOrder => colorOrder ?? 0;
+  int get effectiveStripOrientation => stripOrientation ?? 0;
   int get effectiveTransitionStyle => transitionStyle ?? 0;
   int get effectiveAmbientStyle => ambientStyle ?? 1;
   int get effectiveAmbientDepth => ambientDepth ?? 6;
@@ -575,6 +752,7 @@ class PairedDevice {
         'ledCount': ledCount,
         'maxCurrentMa': maxCurrentMa,
         'colorOrder': colorOrder,
+        'stripOrientation': stripOrientation,
         'transitionStyle': transitionStyle,
         'ambientStyle': ambientStyle,
         'ambientDepth': ambientDepth,
@@ -600,6 +778,7 @@ class PairedDevice {
         ledCount: (json['ledCount'] as num?)?.toInt(),
         maxCurrentMa: (json['maxCurrentMa'] as num?)?.toInt(),
         colorOrder: (json['colorOrder'] as num?)?.toInt(),
+        stripOrientation: (json['stripOrientation'] as num?)?.toInt(),
         transitionStyle: (json['transitionStyle'] as num?)?.toInt(),
         ambientStyle: (json['ambientStyle'] as num?)?.toInt(),
         ambientDepth: (json['ambientDepth'] as num?)?.toInt(),
@@ -627,6 +806,7 @@ class PairedDevice {
     int? ledCount,
     int? maxCurrentMa,
     int? colorOrder,
+    int? stripOrientation,
     int? transitionStyle,
     int? ambientStyle,
     int? ambientDepth,
@@ -651,6 +831,7 @@ class PairedDevice {
         ledCount: ledCount ?? this.ledCount,
         maxCurrentMa: maxCurrentMa ?? this.maxCurrentMa,
         colorOrder: colorOrder ?? this.colorOrder,
+        stripOrientation: stripOrientation ?? this.stripOrientation,
         transitionStyle: transitionStyle ?? this.transitionStyle,
         ambientStyle: ambientStyle ?? this.ambientStyle,
         ambientDepth: ambientDepth ?? this.ambientDepth,
@@ -1118,13 +1299,13 @@ class DefaultModeConfig {
       };
 
   factory DefaultModeConfig.fromJson(Map<String, dynamic> json) => DefaultModeConfig(
-        index: (json['idx'] as num?)?.toInt() ?? 0,
+        index: (json['idx'] as num?)?.toInt() ?? (json['index'] as num?)?.toInt() ?? 0,
         name: json['name'] as String? ?? 'Mode',
         r: (json['r'] as num?)?.toInt() ?? 255,
         g: (json['g'] as num?)?.toInt() ?? 147,
         b: (json['b'] as num?)?.toInt() ?? 41,
         style: (json['style'] as num?)?.toInt() ?? 0,
-        brightness: (json['bright'] as num?)?.toInt() ?? 255,
+        brightness: (json['bright'] as num?)?.toInt() ?? (json['brightness'] as num?)?.toInt() ?? 255,
       );
 
   static const List<DefaultModeConfig> factoryDefaults = [
@@ -1243,17 +1424,17 @@ class LightPreset {
       };
 
   factory LightPreset.fromJson(Map<String, dynamic> json) => LightPreset(
-        index: (json['idx'] as num?)?.toInt() ?? 0,
+        index: (json['idx'] as num?)?.toInt() ?? (json['index'] as num?)?.toInt() ?? 0,
         name: json['name'] as String? ?? 'Preset',
-        brightness: (json['bright'] as num?)?.toInt() ?? 255,
-        transitionStyle: (json['trans'] as num?)?.toInt() ?? 0,
-        ambientStyle: (json['amb'] as num?)?.toInt() ?? 1,
-        ambientDepth: (json['depth'] as num?)?.toInt() ?? 6,
-        cycleEnabled: json['cycle'] as bool? ?? true,
+        brightness: (json['bright'] as num?)?.toInt() ?? (json['brightness'] as num?)?.toInt() ?? 255,
+        transitionStyle: (json['trans'] as num?)?.toInt() ?? (json['transitionStyle'] as num?)?.toInt() ?? 0,
+        ambientStyle: (json['amb'] as num?)?.toInt() ?? (json['ambientStyle'] as num?)?.toInt() ?? 1,
+        ambientDepth: (json['depth'] as num?)?.toInt() ?? (json['ambientDepth'] as num?)?.toInt() ?? 6,
+        cycleEnabled: (json['cycle'] as bool?) ?? (json['cycleEnabled'] as bool?) ?? true,
         r: (json['r'] as num?)?.toInt() ?? 255,
         g: (json['g'] as num?)?.toInt() ?? 147,
         b: (json['b'] as num?)?.toInt() ?? 41,
-        segments: (json['segs'] as List<dynamic>?)
+        segments: ((json['segs'] ?? json['segments']) as List<dynamic>?)
                 ?.map((e) => LedSegment.fromJson(e as Map<String, dynamic>))
                 .toList() ??
             const [],
@@ -1571,6 +1752,56 @@ enum WifiPhase {
   connected,
   failed,
   disconnected,
+  backoff,
+}
+
+class WifiSlotItem {
+  const WifiSlotItem({
+    required this.slot,
+    required this.ssid,
+    required this.isConfigured,
+    required this.isActive,
+    this.rssi = 0,
+  });
+
+  final int slot; // 1 or 2
+  final String ssid;
+  final bool isConfigured;
+  final bool isActive;
+  final int rssi;
+
+  bool get isEmpty => !isConfigured || ssid.isEmpty;
+
+  int get signalBars {
+    if (rssi == 0) return 0;
+    if (rssi >= -60) return 3;
+    if (rssi >= -75) return 2;
+    return 1;
+  }
+
+  String get signalQualityLabel {
+    if (rssi == 0) return 'No Signal';
+    if (rssi >= -55) return 'Excellent';
+    if (rssi >= -68) return 'Good';
+    if (rssi >= -78) return 'Fair';
+    return 'Weak';
+  }
+
+  factory WifiSlotItem.fromJson(Map<String, dynamic> json) => WifiSlotItem(
+        slot: (json['slot'] as num?)?.toInt() ?? 1,
+        ssid: json['ssid'] as String? ?? '',
+        isConfigured: json['configured'] as bool? ?? false,
+        isActive: json['active'] as bool? ?? false,
+        rssi: (json['rssi'] as num?)?.toInt() ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'slot': slot,
+        'ssid': ssid,
+        'configured': isConfigured,
+        'active': isActive,
+        'rssi': rssi,
+      };
 }
 
 class WifiNetworkItem {
@@ -1590,6 +1821,13 @@ class WifiNetworkItem {
     if (rssi >= -60) return 3;
     if (rssi >= -75) return 2;
     return 1;
+  }
+
+  String get signalQualityLabel {
+    if (rssi >= -55) return 'Excellent';
+    if (rssi >= -68) return 'Good';
+    if (rssi >= -78) return 'Fair';
+    return 'Weak';
   }
 
   factory WifiNetworkItem.fromJson(Map<String, dynamic> json) => WifiNetworkItem(
@@ -1615,6 +1853,9 @@ class WifiConnectionState {
     this.scannedNetworks = const [],
     this.isScanning = false,
     this.lastNtpSyncEpoch,
+    this.activeSlot = 0,
+    this.slot1,
+    this.slot2,
   });
 
   final WifiPhase phase;
@@ -1625,17 +1866,37 @@ class WifiConnectionState {
   final List<WifiNetworkItem> scannedNetworks;
   final bool isScanning;
   final int? lastNtpSyncEpoch;
+  final int activeSlot;
+  final WifiSlotItem? slot1;
+  final WifiSlotItem? slot2;
 
   bool get isConnected => phase == WifiPhase.connected && ipAddress.isNotEmpty;
   bool get isConnecting => phase == WifiPhase.connecting || phase == WifiPhase.gotIp || phase == WifiPhase.internetOk;
   bool get hasFailed => phase == WifiPhase.failed;
+  bool get hasSlot1 => slot1 != null && slot1!.isConfigured && slot1!.ssid.isNotEmpty;
+  bool get hasSlot2 => slot2 != null && slot2!.isConfigured && slot2!.ssid.isNotEmpty;
+  bool get hasAnySavedSlot => hasSlot1 || hasSlot2;
+
+  WifiSlotItem? get activeSlotItem {
+    if (activeSlot == 1) return slot1;
+    if (activeSlot == 2) return slot2;
+    return null;
+  }
+
+  int get signalBars {
+    if (rssi == 0) return 0;
+    if (rssi >= -60) return 3;
+    if (rssi >= -75) return 2;
+    return 1;
+  }
 
   String get humanReadableStatus {
     switch (phase) {
       case WifiPhase.scanning:
         return 'Scanning 2.4 GHz networks…';
       case WifiPhase.connecting:
-        return 'Connecting to $currentSsid…';
+        final target = currentSsid.isNotEmpty ? currentSsid : (activeSlotItem?.ssid ?? '');
+        return target.isNotEmpty ? 'Connecting to $target…' : 'Connecting to Wi-Fi…';
       case WifiPhase.gotIp:
         return 'IP assigned ($ipAddress)…';
       case WifiPhase.internetOk:
@@ -1643,13 +1904,17 @@ class WifiConnectionState {
       case WifiPhase.saved:
         return 'Credentials saved';
       case WifiPhase.connected:
-        return currentSsid.isNotEmpty ? 'Connected ($currentSsid)' : 'Connected';
+        final netName = currentSsid.isNotEmpty ? currentSsid : (activeSlotItem?.ssid ?? '');
+        final slotBadge = activeSlot > 0 ? ' [Slot $activeSlot]' : '';
+        return netName.isNotEmpty ? 'Connected ($netName$slotBadge)' : 'Connected';
       case WifiPhase.failed:
         return 'Connection failed: $failureReason';
+      case WifiPhase.backoff:
+        return 'Reconnecting between saved networks…';
       case WifiPhase.disconnected:
-        return 'Disconnected';
+        return hasAnySavedSlot ? 'Offline • Standby' : 'Disconnected';
       case WifiPhase.idle:
-        return 'Not Configured';
+        return hasAnySavedSlot ? 'Offline • Saved Networks Ready' : 'Not Configured';
     }
   }
 
@@ -1662,6 +1927,9 @@ class WifiConnectionState {
     List<WifiNetworkItem>? scannedNetworks,
     bool? isScanning,
     int? lastNtpSyncEpoch,
+    int? activeSlot,
+    WifiSlotItem? slot1,
+    WifiSlotItem? slot2,
   }) =>
       WifiConnectionState(
         phase: phase ?? this.phase,
@@ -1672,6 +1940,9 @@ class WifiConnectionState {
         scannedNetworks: scannedNetworks ?? this.scannedNetworks,
         isScanning: isScanning ?? this.isScanning,
         lastNtpSyncEpoch: lastNtpSyncEpoch ?? this.lastNtpSyncEpoch,
+        activeSlot: activeSlot ?? this.activeSlot,
+        slot1: slot1 ?? this.slot1,
+        slot2: slot2 ?? this.slot2,
       );
 
   static const idle = WifiConnectionState();

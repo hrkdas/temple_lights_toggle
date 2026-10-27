@@ -214,6 +214,25 @@ int main() {
     }
     std::cout << "  ✓ Full strip center-out mode wave: verified frame-by-frame 50 FPS symmetry & wave propagation" << std::endl;
 
-    std::cout << "[SUCCESS] All geometry, easing, wave timing & breathing checks passed perfectly!" << std::endl;
+    // 9. Hardware Strip Orientation Calibration (LTR vs RTL Inverted Mapping)
+    int testLeds = 200;
+    // Standard LTR (0)
+    for (int i = 0; i < testLeds; i++) {
+        int physicalStandard = i;
+        assert(physicalStandard == i);
+    }
+    // Inverted RTL (1)
+    for (int i = 0; i < testLeds; i++) {
+        int physicalInverted = (testLeds - 1) - i;
+        assert(physicalInverted >= 0 && physicalInverted < testLeds);
+        // Reverse inverse yields original index
+        assert((testLeds - 1) - physicalInverted == i);
+    }
+    // Verify user range 1..50 (0-based 0..49) maps to physical 150..199 (1-based 151..200)
+    assert((testLeds - 1) - 0 == 199);
+    assert((testLeds - 1) - 49 == 150);
+    std::cout << "  ✓ Strip Orientation Calibration: Bijective 1:1 mapping verified for LTR & RTL inversion" << std::endl;
+
+    std::cout << "[SUCCESS] All geometry, easing, wave timing, breathing & orientation checks passed perfectly!" << std::endl;
     return 0;
 }

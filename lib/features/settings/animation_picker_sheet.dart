@@ -46,8 +46,9 @@ class _AnimationPickerSheetState extends ConsumerState<AnimationPickerSheet> {
         );
 
     if (mounted) {
+      final messenger = ScaffoldMessenger.of(context);
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(
           backgroundColor: AppTheme.surfaceRaised,
           content: Text(

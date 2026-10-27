@@ -21,6 +21,7 @@
 static uint16_t numLeds = DEFAULT_NUM_LEDS;
 static uint16_t maxCurrentMa = 3000;    // 3A default safety budget
 static uint8_t colorOrder = 0;          // 0=RGB (Hardware Default: Direct Red-Green-Blue), 1=GRB, 2=BRG, 3=BGR
+static uint8_t stripDirection = 0;     // 0=Left-to-Right / Forward (DIN=Start), 1=Right-to-Left / Inverted (DIN=End)
 static uint8_t transitionStyle = 0;    // 0=Center-Out, 1=Linear Sweep, 2=Instant Fade
 static uint8_t ambientStyle = 1;       // 0=Solid, 1=Breathing, 2=Diya Flicker
 static uint8_t ambientDepth = 6;       // 6% depth
@@ -45,7 +46,7 @@ static uint8_t ambientDepth = 6;       // 6% depth
 // ============================================================================
 // BLE & FIRMWARE CONFIG
 // ============================================================================
-#define FIRMWARE_VERSION    "1.3.1"
+#define FIRMWARE_VERSION    "1.4.0"
 #define DEFAULT_DEVICE_NAME "Temple Lights"
 
 static char defaultDeviceName[32] = DEFAULT_DEVICE_NAME;
@@ -165,14 +166,26 @@ struct FirmwareLedSegment {
     uint8_t brightness;   // Segment brightness multiplier (0..255)
     uint8_t effect;       // 0=Solid, 1=Breathe, 2=Diya, 3=Twinkle, 4=Embers, 5=Aurora, 6=Rainbow
     uint8_t speed;        // Effect frequency/speed multiplier (1..10)
+    uint8_t stride;       // Step interval (1=contiguous, 2=alternate odd/even, 3=triad)
+    uint8_t offset;       // Phase offset within stride (0=odd phase, 1=even phase)
     char name[16];
 
-    FirmwareLedSegment() : start(0), count(0), r(255), g(147), b(41), brightness(255), effect(0), speed(5) {
+    FirmwareLedSegment() : start(0), count(0), r(255), g(147), b(41), brightness(255), effect(0), speed(5), stride(1), offset(0) {
         name[0] = '\0';
     }
 
     FirmwareLedSegment(uint16_t s, uint16_t c, uint8_t red, uint8_t green, uint8_t blue, uint8_t br, uint8_t fx, uint8_t spd, const char* n = "")
-        : start(s), count(c), r(red), g(green), b(blue), brightness(br), effect(fx), speed(spd) {
+        : start(s), count(c), r(red), g(green), b(blue), brightness(br), effect(fx), speed(spd), stride(1), offset(0) {
+        if (n != nullptr) {
+            strncpy(name, n, sizeof(name) - 1);
+            name[sizeof(name) - 1] = '\0';
+        } else {
+            name[0] = '\0';
+        }
+    }
+
+    FirmwareLedSegment(uint16_t s, uint16_t c, uint8_t red, uint8_t green, uint8_t blue, uint8_t br, uint8_t fx, uint8_t spd, uint8_t str, uint8_t off, const char* n = "")
+        : start(s), count(c), r(red), g(green), b(blue), brightness(br), effect(fx), speed(spd), stride(str > 0 ? str : 1), offset(off) {
         if (n != nullptr) {
             strncpy(name, n, sizeof(name) - 1);
             name[sizeof(name) - 1] = '\0';
@@ -266,6 +279,11 @@ static uint8_t otaWriteBuffer[OTA_WRITE_BUFFER_BYTES];
 static size_t otaWriteBufferLen = 0;
 static const esp_partition_t* otaTargetPartition = nullptr;
 
+// Temple Lights Interactive OTA RGB Strip Animation Runtime
+static float otaDisplayProgress = 0.0f;
+static unsigned long otaLastAnimMs = 0;
+static uint8_t otaAnimPhase = 0; // 0=None/Idle, 1=Transferring, 2=Verifying/Success, 3=Error/Warning
+
 // Non-blocking OTA frame queue (decouples BLE ISR from flash writes)
 static const uint16_t OTA_RX_MAX_FRAME_SIZE = 540;
 static const uint8_t OTA_RX_QUEUE_CAPACITY = 32;
@@ -355,6 +373,7 @@ void load_hw_and_anim_config();
 void save_state() {
     prefs.begin("tl", false);
     prefs.putUChar("mode", currentMode);
+    prefs.putUChar("preset", activePresetIndex);
     prefs.putUChar("bright", brightness);
     prefs.putUChar("r", customR);
     prefs.putUChar("g", customG);
@@ -367,6 +386,7 @@ void save_hw_config() {
     prefs.putUShort("leds", numLeds);
     prefs.putUShort("max_ma", maxCurrentMa);
     prefs.putUChar("color_ord", colorOrder);
+    prefs.putUChar("strip_dir", stripDirection);
     prefs.end();
 }
 
@@ -386,6 +406,7 @@ void load_hw_and_anim_config() {
     ambientStyle    = prefs.getUChar("amb_st", 1);
     ambientDepth    = prefs.getUChar("amb_dp", 6);
     colorOrder      = prefs.getUChar("color_ord", 0);
+    stripDirection  = prefs.getUChar("strip_dir", 0);
     prefs.end();
 
     if (numLeds == 0 || numLeds > MAX_LEDS) numLeds = DEFAULT_NUM_LEDS;
@@ -394,20 +415,22 @@ void load_hw_and_anim_config() {
     if (ambientStyle > 6) ambientStyle = 1;
     if (ambientDepth == 0 || ambientDepth > 50) ambientDepth = 6;
     if (colorOrder > 3) colorOrder = 0;
+    if (stripDirection > 1) stripDirection = 0;
 
     strip.updateLength(numLeds);
     strip.updateType(get_neopixel_type(colorOrder));
-    Serial.printf("[NVS] Loaded HW Config: %d LEDs, Max %d mA, ColorOrder=%d | Anim: trans=%d, amb=%d, depth=%d%%\n",
-                  numLeds, maxCurrentMa, colorOrder, transitionStyle, ambientStyle, ambientDepth);
+    Serial.printf("[NVS] Loaded HW Config: %d LEDs, Max %d mA, ColorOrder=%d, StripDir=%d | Anim: trans=%d, amb=%d, depth=%d%%\n",
+                  numLeds, maxCurrentMa, colorOrder, stripDirection, transitionStyle, ambientStyle, ambientDepth);
 }
 
 void load_state() {
     prefs.begin("tl", true);
-    currentMode = prefs.getUChar("mode", 0);
-    brightness  = prefs.getUChar("bright", 255);
-    customR     = prefs.getUChar("r", 255);
-    customG     = prefs.getUChar("g", 147);
-    customB     = prefs.getUChar("b", 41);
+    currentMode       = prefs.getUChar("mode", 0);
+    activePresetIndex = prefs.getUChar("preset", currentMode);
+    brightness        = prefs.getUChar("bright", 255);
+    customR           = prefs.getUChar("r", 255);
+    customG           = prefs.getUChar("g", 147);
+    customB           = prefs.getUChar("b", 41);
     prefs.end();
     if (currentMode > 3) currentMode = 0;
     targetBrightness = brightness;
@@ -546,6 +569,11 @@ void load_presets_from_nvs() {
         if (prefs.isKey(k.c_str())) {
             prefs.getBytes(k.c_str(), &presets[i], sizeof(FirmwarePreset));
             presets[i].name[sizeof(presets[i].name) - 1] = '\0';
+            for (int s = 0; s < presets[i].segmentCount; s++) {
+                if (presets[i].segments[s].stride < 1) {
+                    presets[i].segments[s].stride = 1;
+                }
+            }
         }
     }
     // Backward compatibility: ensure factory standard presets 0, 1, 2 always use
@@ -591,7 +619,7 @@ uint8_t get_next_cycle_preset(uint8_t current) {
         }
     }
     // Fallback: advance cyclically within active count
-    return (current + 1) % ((presetCount > 3) ? 3 : presetCount);
+    return (current + 1) % presetCount;
 }
 
 void activate_preset(uint8_t idx) {
@@ -875,6 +903,9 @@ void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbCol
             if (sEnd > numLeds) sEnd = numLeds;
             float sBright = (float)seg.brightness / 255.0f;
             for (int i = seg.start; i < sEnd; i++) {
+                if (seg.stride > 1 && ((i - seg.start) % seg.stride) != seg.offset) {
+                    continue;
+                }
                 out[i] = {
                     (uint8_t)(seg.r * sBright + 0.5f),
                     (uint8_t)(seg.g * sBright + 0.5f),
@@ -922,6 +953,9 @@ void compute_target_colors(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, RgbCol
                 if (sEnd > numLeds) sEnd = numLeds;
                 float sBright = (float)seg.brightness / 255.0f;
                 for (int i = seg.start; i < sEnd; i++) {
+                    if (seg.stride > 1 && ((i - seg.start) % seg.stride) != seg.offset) {
+                        continue;
+                    }
                     out[i] = {
                         (uint8_t)(seg.r * sBright + 0.5f),
                         (uint8_t)(seg.g * sBright + 0.5f),
@@ -1025,7 +1059,8 @@ void render_frame(unsigned long now) {
         g = (uint8_t)(g * ledBright + 0.5f);
         b = (uint8_t)(b * ledBright + 0.5f);
         renderedLeds[i] = { r, g, b };
-        strip.setPixelColor(i, r, g, b);
+        int physicalIdx = (stripDirection == 1) ? (numLeds - 1 - i) : i;
+        strip.setPixelColor(physicalIdx, r, g, b);
     }
     // Clear any extra pixels if previously longer
     for (int i = numLeds; i < MAX_LEDS; i++) {
@@ -1318,6 +1353,7 @@ void notify_state() {
                  ",\"leds\":" + String(numLeds) +
                  ",\"max_ma\":" + String(maxCurrentMa) +
                  ",\"color_order\":" + String(colorOrder) +
+                 ",\"strip_dir\":" + String(stripDirection) +
                  ",\"trans\":" + String(transitionStyle) +
                  ",\"amb\":" + String(ambientStyle) +
                  ",\"depth\":" + String(ambientDepth) +
@@ -1470,17 +1506,177 @@ bool otaAppendToWriteBuffer(const uint8_t* data, size_t len) {
     return true;
 }
 
+// ============================================================================
+// TEMPLE LIGHTS INTERACTIVE OTA ANIMATION RUNTIME
+// ============================================================================
+static void otaUpdateProgressAnimation(unsigned long now) {
+    if (otaAnimPhase != 1) return;
+
+    // Rate-limit frame render to ~33 FPS (every 30ms)
+    if (now - otaLastAnimMs < 30) return;
+
+    // If incoming BLE frames are pending in queue, let loop() process packets first
+    if (sOtaRxHead != sOtaRxTail) return;
+
+    otaLastAnimMs = now;
+
+    float targetProgress = 0.0f;
+    if (otaExpectedFirmwareSize > 0) {
+        targetProgress = (float)otaWrittenBytes / (float)otaExpectedFirmwareSize;
+        if (targetProgress > 1.0f) targetProgress = 1.0f;
+        if (targetProgress < 0.0f) targetProgress = 0.0f;
+    }
+
+    // Smooth exponential slew filter so progress advances smoothly across the strip
+    float delta = targetProgress - otaDisplayProgress;
+    if (delta > 0.0f) {
+        otaDisplayProgress += delta * 0.22f;
+        if (targetProgress - otaDisplayProgress < 0.001f) {
+            otaDisplayProgress = targetProgress;
+        }
+    } else if (targetProgress >= 0.999f) {
+        otaDisplayProgress = 1.0f;
+    }
+
+    const uint16_t total = (numLeds > 0) ? numLeds : DEFAULT_NUM_LEDS;
+    float headPos = otaDisplayProgress * (float)(total - 1);
+
+    for (int i = 0; i < total; i++) {
+        int physicalIdx = (stripDirection == 1) ? (total - 1 - i) : i;
+        float dist = (float)i - headPos;
+
+        // Written portion (behind the moving head)
+        if (dist < -2.0f) {
+            float breath = 0.88f + 0.12f * sinf((now * 0.003f) + ((float)i * 0.08f));
+            uint8_t r = (uint8_t)(255.0f * breath * 0.75f);
+            uint8_t g = (uint8_t)(160.0f * breath * 0.75f);
+            uint8_t b = (uint8_t)(42.0f * breath * 0.75f);
+            strip.setPixelColor(physicalIdx, r, g, b);
+            continue;
+        }
+
+        // Unwritten guide track (ahead of the moving head)
+        if (dist > 2.0f) {
+            float trackShimmer = 0.5f + 0.5f * sinf((now * 0.005f) - ((float)i * 0.25f));
+            uint8_t r = (uint8_t)(8.0f + 6.0f * trackShimmer);
+            uint8_t g = (uint8_t)(6.0f + 4.0f * trackShimmer);
+            uint8_t b = (uint8_t)(16.0f + 12.0f * trackShimmer);
+            strip.setPixelColor(physicalIdx, r, g, b);
+            continue;
+        }
+
+        // Active Flash Head / Data Spark (|dist| <= 2.0f)
+        float headFactor = 1.0f - (fabsf(dist) / 2.0f);
+        if (headFactor < 0.0f) headFactor = 0.0f;
+        headFactor = headFactor * headFactor; // quadratic falloff
+
+        float pulse = 0.82f + 0.18f * sinf(now * 0.020f);
+
+        float wrR = 255.0f * 0.75f;
+        float wrG = 160.0f * 0.75f;
+        float wrB = 42.0f * 0.75f;
+
+        float sparkR = 255.0f;
+        float sparkG = 245.0f * pulse;
+        float sparkB = 190.0f * pulse;
+
+        float bgR = 10.0f;
+        float bgG = 8.0f;
+        float bgB = 22.0f;
+
+        float r, g, b;
+        if (dist <= 0.0f) {
+            r = wrR + (sparkR - wrR) * headFactor;
+            g = wrG + (sparkG - wrG) * headFactor;
+            b = wrB + (sparkB - wrB) * headFactor;
+        } else {
+            r = bgR + (sparkR - bgR) * headFactor;
+            g = bgG + (sparkG - bgG) * headFactor;
+            b = bgB + (sparkB - bgB) * headFactor;
+        }
+
+        strip.setPixelColor(physicalIdx,
+            (uint8_t)fminf(255.0f, fmaxf(0.0f, r + 0.5f)),
+            (uint8_t)fminf(255.0f, fmaxf(0.0f, g + 0.5f)),
+            (uint8_t)fminf(255.0f, fmaxf(0.0f, b + 0.5f))
+        );
+    }
+
+    for (int i = total; i < MAX_LEDS; i++) {
+        strip.setPixelColor(i, 0, 0, 0);
+    }
+    strip.show();
+}
+
+static void otaPlaySuccessCelebrationAnimation(unsigned long durationMs) {
+    const uint16_t total = (numLeds > 0) ? numLeds : DEFAULT_NUM_LEDS;
+    unsigned long startMs = millis();
+    while (millis() - startMs < durationMs) {
+        unsigned long elapsed = millis() - startMs;
+        float t = (float)elapsed / (float)durationMs;
+        if (t > 1.0f) t = 1.0f;
+
+        float center = (total - 1) * 0.5f;
+
+        for (int i = 0; i < total; i++) {
+            int physicalIdx = (stripDirection == 1) ? (total - 1 - i) : i;
+            float normDist = fabsf((float)i - center) / (center > 0.0f ? center : 1.0f);
+            if (t < 0.5f) {
+                // Wave 1: Center-out radiant golden emerald bloom
+                float waveT = t / 0.5f;
+                float wavePos = waveT * 1.2f;
+                float intensity = 1.0f - fabsf(normDist - wavePos) * 2.0f;
+                if (intensity < 0.0f) intensity = 0.0f;
+                intensity = intensity * intensity;
+
+                uint8_t r = (uint8_t)(80.0f + 175.0f * intensity);
+                uint8_t g = (uint8_t)(210.0f + 45.0f * intensity);
+                uint8_t b = (uint8_t)(60.0f + 60.0f * intensity);
+                strip.setPixelColor(physicalIdx, r, g, b);
+            } else {
+                // Wave 2: Divine warm golden pulse settling into serene temple light
+                float waveT = (t - 0.5f) / 0.5f;
+                float pulse = 0.70f + 0.30f * sinf(waveT * 3.14159265f * 2.0f);
+                uint8_t r = (uint8_t)(255.0f * pulse);
+                uint8_t g = (uint8_t)(180.0f * pulse);
+                uint8_t b = (uint8_t)(60.0f * pulse);
+                strip.setPixelColor(physicalIdx, r, g, b);
+            }
+        }
+        for (int i = total; i < MAX_LEDS; i++) {
+            strip.setPixelColor(i, 0, 0, 0);
+        }
+        strip.show();
+        delay(20);
+    }
+}
+
 void otaAbortSession() {
     if (otaInProgress) {
         Serial.println("[OTA] Aborting session; keeping current firmware");
         Update.abort();
         otaInProgress = false;
     }
+    otaAnimPhase = 0;
     otaWriteBufferLen = 0;
     otaRestoreNormalBle();
     otaClearRxQueue();
     wifiManagerResumeAfterOta();
     rainmakerManagerResumeAfterOta();
+
+    // Soft warning flash before restoring light state
+    const uint16_t total = (numLeds > 0) ? numLeds : DEFAULT_NUM_LEDS;
+    for (int pulse = 0; pulse < 2; pulse++) {
+        for (int i = 0; i < total; i++) strip.setPixelColor(i, 180, 40, 20);
+        strip.show();
+        delay(120);
+        strip.clear();
+        strip.show();
+        delay(80);
+    }
+    compute_target_colors(currentMode, customR, customG, customB, currentLeds);
+    currentBrightness = (float)brightness;
+    render_frame(millis());
 }
 
 void otaHandleControlFrame(const uint8_t* data, size_t len) {
@@ -1528,11 +1724,13 @@ void otaHandleControlFrame(const uint8_t* data, size_t len) {
         otaExpectedChunkIndex = 0;
         otaWriteBufferLen = 0;
         otaLastPacketMs = millis();
-
-        // Clear LED strip during OTA to minimize power and flash latency
+        otaDisplayProgress = 0.0f;
+        otaAnimPhase = 1; // Active OTA Transfer animation
+        otaLastAnimMs = 0;
         currentAnim = ANIM_NONE;
-        strip.clear();
-        strip.show();
+
+        // Render initial 0% OTA progress frame immediately (guide track illuminated)
+        otaUpdateProgressAnimation(millis());
 
         Serial.printf("[OTA] START accepted: fwSize=%u bytes\n", (unsigned)fwSize);
         otaNotifyStartOk();
@@ -1569,11 +1767,12 @@ void otaHandleControlFrame(const uint8_t* data, size_t len) {
         }
 
         otaInProgress = false;
+        otaAnimPhase = 2; // Verified Success
         otaRestoreNormalBle();
         otaNotifyDone();
         record_light_log(false, "OTA Firmware Update");
-        Serial.println("[OTA] Update successful & verified! Rebooting in 2500ms...");
-        delay(2500);
+        Serial.println("[OTA] Update successful & verified! Playing celebration & rebooting in 2500ms...");
+        otaPlaySuccessCelebrationAnimation(2500);
         ESP.restart();
         return;
     }
@@ -1797,6 +1996,12 @@ void send_presets_hydration_to_app() {
                    ",\"bright\":" + String(seg.brightness) +
                    ",\"fx\":" + String(seg.effect) +
                    ",\"spd\":" + String(seg.speed);
+            if (seg.stride > 1) {
+                pkt += ",\"stride\":" + String(seg.stride);
+            }
+            if (seg.offset > 0) {
+                pkt += ",\"offset\":" + String(seg.offset);
+            }
             if (strlen(seg.name) > 0) {
                 pkt += ",\"name\":\"" + String(seg.name) + "\"";
             }
@@ -1915,6 +2120,10 @@ int extract_json_segments(const String& json, FirmwareLedSegment* outSegments, i
 
         outSegments[count].effect = extract_json_int(obj, "fx", 0);
         outSegments[count].speed = extract_json_int(obj, "spd", 5);
+        int strVal = extract_json_int(obj, "stride", 1);
+        outSegments[count].stride = (strVal < 1) ? 1 : (uint8_t)strVal;
+        int offVal = extract_json_int(obj, "offset", 0);
+        outSegments[count].offset = (offVal < 0) ? 0 : (uint8_t)offVal;
 
         String nameStr = extract_json_string(obj, "name");
         if (nameStr.length() > 0) {
@@ -1989,6 +2198,11 @@ void handle_command(const String& json) {
             p.ambientStyle = extract_json_int(json, "amb", 1);
             p.ambientDepth = extract_json_int(json, "depth", 6);
             p.cycleEnabled = extract_json_bool(json, "cycle", true);
+            if (p.cycleEnabled) {
+                cycleBitmask |= (1 << idx);
+            } else {
+                cycleBitmask &= ~(1 << idx);
+            }
             p.r = extract_json_int(json, "r", 255);
             p.g = extract_json_int(json, "g", 147);
             p.b = extract_json_int(json, "b", 41);
@@ -2062,6 +2276,7 @@ void handle_command(const String& json) {
             activeSegmentCount = 0; // Clear segment overrides for standard modes
             currentMode = m;
             if (m < 3) {
+                activePresetIndex = m;
                 targetBrightness = (defaultModes[m].brightness > 0) ? defaultModes[m].brightness : 255;
                 activeBrightness = targetBrightness;
                 if (!wasOff) brightness = targetBrightness;
@@ -2135,20 +2350,20 @@ void handle_command(const String& json) {
     }
 
     if (cmd == "on") {
-        uint8_t nextMode = get_next_cycle_preset(currentMode);
-        activate_preset(nextMode);
+        uint8_t nextPreset = get_next_cycle_preset(activePresetIndex);
+        activate_preset(nextPreset);
         start_center_on_animation();
         stateDirty = true;
         lastStateChangeMs = millis();
         notify_state();
         record_light_log(true, "App Turn ON");
-        Serial.printf("[LED] Power ON → Mode %d (Brightness %d)\n", currentMode, brightness);
+        Serial.printf("[LED] Power ON → Preset %d (Mode %d, Brightness %d)\n", activePresetIndex, currentMode, brightness);
         return;
     }
 
     if (cmd == "next_mode") {
-        uint8_t nextMode = get_next_cycle_preset(currentMode);
-        activate_preset(nextMode);
+        uint8_t nextPreset = get_next_cycle_preset(activePresetIndex);
+        activate_preset(nextPreset);
         bool wasOff = (currentBrightness <= 0.5f);
         if (wasOff) {
             start_center_on_animation();
@@ -2159,7 +2374,7 @@ void handle_command(const String& json) {
         stateDirty = true;
         lastStateChangeMs = millis();
         notify_state();
-        Serial.printf("[LED] Next mode → %d\n", currentMode);
+        Serial.printf("[LED] Next preset → %d (Mode %d)\n", activePresetIndex, currentMode);
         return;
     }
 
@@ -2220,9 +2435,19 @@ void handle_command(const String& json) {
 
     if (cmd == "get_rmaker_info") {
         const char* nid = rainmakerManagerGetNodeId();
+        bool isRunning = rainmakerManagerIsRunning();
+        bool isCloudOk = rainmakerManagerIsCloudConnected();
+        bool isClaimed = rainmakerManagerIsDeviceClaimed();
+        int claimState = rainmakerManagerGetClaimState();
+        int mapState = rainmakerManagerGetMapState();
+
         String res = "{\"type\":\"rmaker_info\",\"node_id\":\"" + String(nid ? nid : "") +
-                     "\",\"running\":" + String(rainmakerManagerIsRunning() ? "true" : "false") +
-                     ",\"cloud_ok\":" + String(rainmakerManagerIsCloudConnected() ? "true" : "false") + "}";
+                     "\",\"running\":" + String(isRunning ? "true" : "false") +
+                     ",\"cloud_ok\":" + String(isCloudOk ? "true" : "false") +
+                     ",\"mqtt_ok\":" + String(isCloudOk ? "true" : "false") +
+                     ",\"claimed\":" + String(isClaimed ? "true" : "false") +
+                     ",\"claim_state\":" + String(claimState) +
+                     ",\"map_state\":" + String(mapState) + "}";
         pCharacteristic->setValue((uint8_t*)res.c_str(), res.length());
         pCharacteristic->notify();
         return;
@@ -2232,20 +2457,32 @@ void handle_command(const String& json) {
         String uid = extract_json_string(json, "user_id");
         String sec = extract_json_string(json, "secret_key");
         if (uid.length() > 0) {
-            rainmakerManagerMapUser(uid.c_str(), sec.c_str());
-            String res = "{\"type\":\"rmaker_map_ack\",\"ok\":true}";
+            bool ok = rainmakerManagerMapUser(uid.c_str(), sec.c_str());
+            String res = "{\"type\":\"rmaker_map_ack\",\"ok\":" + String(ok ? "true" : "false");
+            if (!ok) {
+                if (!rainmakerManagerIsDeviceClaimed()) {
+                    res += ",\"reason\":\"not_claimed\"";
+                } else if (!rainmakerManagerIsCloudConnected()) {
+                    res += ",\"reason\":\"mqtt_offline\"";
+                } else {
+                    res += ",\"reason\":\"map_error\"";
+                }
+            }
+            res += "}";
             pCharacteristic->setValue((uint8_t*)res.c_str(), res.length());
             pCharacteristic->notify();
         }
         return;
     }
 
-    // 1c. Hardware & LED Count / Color Order Configuration: {"cmd":"set_hw_config","leds":180,"max_ma":3000,"color_order":0}
-    if (cmd == "set_hw_config" || cmd == "set_color_order") {
+    // 1c. Hardware & LED Count / Color Order / Strip Direction: {"cmd":"set_hw_config","leds":180,"max_ma":3000,"color_order":0,"strip_dir":1}
+    if (cmd == "set_hw_config" || cmd == "set_color_order" || cmd == "set_strip_dir") {
         int newLeds = extract_json_int(json, "leds", -1);
         int newMaxMa = extract_json_int(json, "max_ma", -1);
         int newOrder = extract_json_int(json, "color_order", -1);
         if (newOrder == -1) newOrder = extract_json_int(json, "order", -1);
+        int newDir = extract_json_int(json, "strip_dir", -1);
+        if (newDir == -1) newDir = extract_json_int(json, "dir", -1);
         bool changed = false;
 
         if (newLeds >= 10 && newLeds <= MAX_LEDS) {
@@ -2268,6 +2505,14 @@ void handle_command(const String& json) {
             render_frame(millis());
             changed = true;
             Serial.printf("[HW] Strip color order updated to %d\n", colorOrder);
+        }
+        if (newDir >= 0 && newDir <= 1) {
+            stripDirection = (uint8_t)newDir;
+            render_frame(millis());
+            changed = true;
+            Serial.printf("[HW] Strip direction updated to %d (%s)\n",
+                          stripDirection,
+                          stripDirection == 1 ? "Right-to-Left (Inverted)" : "Left-to-Right (Standard)");
         }
         if (changed) {
             save_hw_config();
@@ -2386,7 +2631,7 @@ void handle_command(const String& json) {
         return;
     }
 
-    // 2b. WiFi Provisioning & Autonomous Network Clock
+    // 2b. WiFi Provisioning & Autonomous Network Clock (Dual-Slot & Failover)
     if (cmd == "wifi_scan") {
         wifiManagerStartScan();
         return;
@@ -2395,11 +2640,19 @@ void handle_command(const String& json) {
         String ssid = extract_json_string(json, "ssid");
         String psk = extract_json_string(json, "psk");
         bool save = extract_json_bool(json, "save", true);
-        wifiManagerConnect(ssid, psk, save);
+        int slot = extract_json_int(json, "slot", 1);
+        if (slot < 1 || slot > 2) slot = 1;
+        wifiManagerConnect((uint8_t)slot, ssid, psk, save);
         return;
     }
     if (cmd == "wifi_forget") {
-        wifiManagerForget();
+        int slot = extract_json_int(json, "slot", 0);
+        wifiManagerForget((uint8_t)slot);
+        return;
+    }
+    if (cmd == "wifi_switch_slot") {
+        int slot = extract_json_int(json, "slot", 1);
+        wifiManagerSwitchSlot((uint8_t)slot);
         return;
     }
     if (cmd == "wifi_status") {
@@ -2918,15 +3171,19 @@ void setup() {
     load_schedules_from_nvs();
     load_logs_from_nvs();
 
+    // Ensure activePresetIndex is within valid bounds of loaded presets
+    if (activePresetIndex >= presetCount) {
+        activePresetIndex = 0;
+    }
+
     // Power-cycle mode advancement through cycle-enabled presets
-    uint8_t lastMode = currentMode;
-    uint8_t nextMode = get_next_cycle_preset(lastMode);
-    currentMode = nextMode;
-    activate_preset(currentMode);
+    uint8_t lastPreset = activePresetIndex;
+    uint8_t nextPreset = get_next_cycle_preset(lastPreset);
+    activate_preset(nextPreset);
     save_state();     // Persist immediately so subsequent boots advance from here
 
-    Serial.printf("[Boot] Last Mode: %d -> Active Mode: %d | Brightness: %d\n",
-                  lastMode, currentMode, brightness);
+    Serial.printf("[Boot] Last Preset: %d -> Active Preset: %d (Mode %d) | Brightness: %d\n",
+                  lastPreset, activePresetIndex, currentMode, brightness);
 
     record_light_log(true, "Power Cycle Boot");
 
@@ -3019,13 +3276,15 @@ void loop() {
     // Process high-speed OTA command queue
     processOtaCommandQueue();
 
-    // If OTA firmware flash is active, dedicate CPU to flash operations
+    // If OTA firmware flash is active, dedicate CPU to flash operations & smooth interactive strip animation
     if (otaInProgress) {
         if (millis() - otaLastPacketMs > 15000) {
             Serial.println("[OTA] Timeout waiting for packets -> Aborting");
             otaNotifyError(OTA_ERR_TIMEOUT);
             otaAbortSession();
+            return;
         }
+        otaUpdateProgressAnimation(millis());
         delay(2);
         return;
     }

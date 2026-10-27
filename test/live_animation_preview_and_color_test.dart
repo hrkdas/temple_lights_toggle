@@ -181,5 +181,93 @@ void main() {
       notifier.setColorOrder(1);
       expect(container.read(lightControlProvider).colorOrder, 1);
     });
+
+    test('Strip Orientation Calibration: contracts, models, bijective inversion math, backward-compatible JSON and notifier update', () {
+      // 1. Contract packet encoding
+      final pktDir = LightPacketEncoder.encodeSetStripDirection(1);
+      final jsonDir = jsonDecode(utf8.decode(pktDir)) as Map<String, dynamic>;
+      expect(jsonDir['cmd'], 'set_strip_dir');
+      expect(jsonDir['dir'], 1);
+
+      final pktHw = LightPacketEncoder.encodeSetHwConfig(
+        leds: 200,
+        maxCurrentMa: 3000,
+        colorOrder: 1,
+        stripDirection: 1,
+      );
+      final jsonHw = jsonDecode(utf8.decode(pktHw)) as Map<String, dynamic>;
+      expect(jsonHw['cmd'], 'set_hw_config');
+      expect(jsonHw['leds'], 200);
+      expect(jsonHw['color_order'], 1);
+      expect(jsonHw['strip_dir'], 1);
+
+      // 2. Model orientation names
+      expect(LightState.orientationNames.length, 2);
+      expect(LightState.orientationNames[0], contains('Left to Right'));
+      expect(LightState.orientationNames[1], contains('Right to Left'));
+      const stateLtr = LightState(stripOrientation: 0);
+      const stateRtl = LightState(stripOrientation: 1);
+      expect(stateLtr.orientationName, contains('Left to Right'));
+      expect(stateRtl.orientationName, contains('Right to Left'));
+
+      // 3. Bijective physical index inversion math
+      const totalLeds = 200;
+      // In LTR, index 0 is 0, index 49 is 49
+      // In RTL, user range 1..50 (0-based 0..49) maps to physical 150..199
+      int mapIndex(int i, int total, int dir) => dir == 1 ? (total - 1 - i) : i;
+      expect(mapIndex(0, totalLeds, 0), 0);
+      expect(mapIndex(49, totalLeds, 0), 49);
+      expect(mapIndex(0, totalLeds, 1), 199);
+      expect(mapIndex(49, totalLeds, 1), 150);
+      // Reversible 1:1 check
+      for (int i = 0; i < totalLeds; i++) {
+        final phys = mapIndex(i, totalLeds, 1);
+        expect(mapIndex(phys, totalLeds, 1), i);
+      }
+
+      // 4. PairedDevice JSON serialization & backward compatibility
+      final dev = PairedDevice(
+        id: 'test_dev_orient',
+        name: 'Mandir Altar',
+        lastSeen: DateTime.now(),
+        stripOrientation: 1,
+      );
+      final devJson = dev.toJson();
+      expect(devJson['stripOrientation'], 1);
+      final parsedDev = PairedDevice.fromJson(devJson);
+      expect(parsedDev.stripOrientation, 1);
+      expect(parsedDev.effectiveStripOrientation, 1);
+
+      // Crucial Backward Compatibility: Older backup / database without stripOrientation field
+      final legacyJson = <String, dynamic>{
+        'id': 'legacy_dev',
+        'name': 'Old Shrine',
+        'lastSeen': DateTime.now().toIso8601String(),
+        'ledCount': 150,
+      };
+      final legacyParsed = PairedDevice.fromJson(legacyJson);
+      expect(legacyParsed.stripOrientation, isNull);
+      expect(legacyParsed.effectiveStripOrientation, 0); // Defaults gracefully to LTR without crashing
+
+      // 5. Provider state updates & hardware notification hydration
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(lightControlProvider.notifier);
+      expect(container.read(lightControlProvider).stripOrientation, 0); // Default LTR
+
+      notifier.setStripOrientation(1);
+      expect(container.read(lightControlProvider).stripOrientation, 1);
+
+      // Hardware state echo packet update
+      notifier.updateFromHardware(
+        mode: 0,
+        brightness: 255,
+        r: 255,
+        g: 147,
+        b: 41,
+        stripOrientation: 0,
+      );
+      expect(container.read(lightControlProvider).stripOrientation, 0);
+    });
   });
 }

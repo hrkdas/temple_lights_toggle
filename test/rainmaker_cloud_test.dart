@@ -102,15 +102,33 @@ void main() {
   });
 
   group('LightState Rainmaker Properties Tests', () {
-    test('LightState stores and updates rainmakerNodeId', () {
+    test('LightState defaults diagnostic fields safely and updates rainmakerNodeId', () {
       const initial = LightState();
       expect(initial.rainmakerNodeId, isNull);
+      expect(initial.rainmakerMqttConnected, false);
+      expect(initial.rainmakerDeviceClaimed, false);
+      expect(initial.rainmakerClaimState, 0);
+      expect(initial.rainmakerMapState, 0);
 
-      final updated = initial.copyWith(rainmakerNodeId: 'node_esp32_mandir_01');
+      final updated = initial.copyWith(
+        rainmakerNodeId: 'node_esp32_mandir_01',
+        rainmakerMqttConnected: true,
+        rainmakerDeviceClaimed: true,
+        rainmakerClaimState: 2,
+        rainmakerMapState: 3,
+      );
       expect(updated.rainmakerNodeId, 'node_esp32_mandir_01');
+      expect(updated.rainmakerMqttConnected, true);
+      expect(updated.rainmakerDeviceClaimed, true);
+      expect(updated.rainmakerClaimState, 2);
+      expect(updated.rainmakerMapState, 3);
 
       final preserved = updated.copyWith(brightness: 200);
       expect(preserved.rainmakerNodeId, 'node_esp32_mandir_01');
+      expect(preserved.rainmakerMqttConnected, true);
+      expect(preserved.rainmakerDeviceClaimed, true);
+      expect(preserved.rainmakerClaimState, 2);
+      expect(preserved.rainmakerMapState, 3);
       expect(preserved.brightness, 200);
     });
   });
@@ -197,6 +215,7 @@ void main() {
         overrides: [
           kvStoreProvider.overrideWithValue(kv),
           rainmakerCloudServiceProvider.overrideWithValue(fakeService),
+          activeDeviceProvider.overrideWithValue(null),
         ],
       );
 
@@ -218,6 +237,59 @@ void main() {
       expect(kv.getString(KvKeys.rainmakerEmail), 'test@gmail.com');
       expect(kv.getString(KvKeys.rainmakerUserId), 'uid_1');
     });
+
+    test('mapActiveDevice verifies cloud node registration before confirming link', () async {
+      final fakeService = FakeRainmakerCloudService(
+        userNodes: ['node_esp32_verified'],
+      );
+      final container = ProviderContainer(
+        overrides: [
+          kvStoreProvider.overrideWithValue(kv),
+          rainmakerCloudServiceProvider.overrideWithValue(fakeService),
+          activeDeviceProvider.overrideWithValue(null),
+        ],
+      );
+
+      // Authenticate
+      await container.read(rainmakerAuthProvider.notifier).loginWithOAuthCode(
+            'rainmaker://com.espressif.novahome/success?code=valid_code',
+          );
+
+      // Map verified device
+      final ok = await container
+          .read(rainmakerAuthProvider.notifier)
+          .mapActiveDevice(nodeId: 'node_esp32_verified');
+      expect(ok, true);
+      expect(container.read(rainmakerAuthProvider).nodes, contains('node_esp32_verified'));
+      expect(container.read(rainmakerAuthProvider).errorMessage, isNull);
+    });
+
+    test('mapActiveDevice shows warning if device mapped via API but not yet confirmed by MQTT', () async {
+      final fakeService = FakeRainmakerCloudService(
+        userNodes: [], // Cloud returns empty nodes because device hasn't MQTT confirmed
+      );
+      final container = ProviderContainer(
+        overrides: [
+          kvStoreProvider.overrideWithValue(kv),
+          rainmakerCloudServiceProvider.overrideWithValue(fakeService),
+          activeDeviceProvider.overrideWithValue(null),
+        ],
+      );
+
+      // Authenticate
+      await container.read(rainmakerAuthProvider.notifier).loginWithOAuthCode(
+            'rainmaker://com.espressif.novahome/success?code=valid_code',
+          );
+
+      final ok = await container
+          .read(rainmakerAuthProvider.notifier)
+          .mapActiveDevice(nodeId: 'node_unconfirmed');
+      expect(ok, true);
+      expect(
+        container.read(rainmakerAuthProvider).errorMessage,
+        contains('awaiting confirmation'),
+      );
+    });
   });
 }
 
@@ -230,9 +302,13 @@ class FakeRainmakerCloudService extends RainmakerCloudService {
       email: 'test@gmail.com',
       userId: 'uid_1',
     ),
+    this.userNodes = const ['node_test_123'],
+    this.mapSuccess = true,
   });
 
   final RainmakerLoginResponse exchangeResult;
+  final List<String> userNodes;
+  final bool mapSuccess;
 
   @override
   Future<RainmakerLoginResponse> exchangeOAuthCode(String code) async {
@@ -242,6 +318,15 @@ class FakeRainmakerCloudService extends RainmakerCloudService {
 
   @override
   Future<List<String>> getUserNodes({required String accessToken}) async {
-    return ['node_test_123'];
+    return userNodes;
+  }
+
+  @override
+  Future<bool> mapNodeToUser({
+    required String accessToken,
+    required String nodeId,
+    String? secretKey,
+  }) async {
+    return mapSuccess;
   }
 }
