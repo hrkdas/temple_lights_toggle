@@ -1,5 +1,6 @@
 #include "rainmaker_manager.h"
 #include <RMaker.h>
+#include <esp_rmaker_user_mapping.h>
 #include <WiFi.h>
 #include <math.h>
 
@@ -395,4 +396,15 @@ bool rainmakerManagerIsCloudConnected() {
 
 const char* rainmakerManagerGetNodeId() {
     return esp_rmaker_get_node_id();
+}
+
+void rainmakerManagerMapUser(const char* userId, const char* secretKey) {
+    if (!userId || strlen(userId) == 0) return;
+    Serial.printf("[RMAKER] Triggering user-node mapping: user=%s, key=%s\n", userId, secretKey ? secretKey : "");
+    esp_err_t err = esp_rmaker_start_user_node_mapping((char*)userId, (char*)(secretKey ? secretKey : ""));
+    if (err == ESP_OK) {
+        Serial.println("[RMAKER] User-node mapping workflow successfully triggered.");
+    } else {
+        Serial.printf("[RMAKER] esp_rmaker_start_user_node_mapping error: 0x%X\n", err);
+    }
 }

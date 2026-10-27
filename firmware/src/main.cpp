@@ -45,7 +45,7 @@ static uint8_t ambientDepth = 6;       // 6% depth
 // ============================================================================
 // BLE & FIRMWARE CONFIG
 // ============================================================================
-#define FIRMWARE_VERSION    "1.3.0"
+#define FIRMWARE_VERSION    "1.3.1"
 #define DEFAULT_DEVICE_NAME "Temple Lights"
 
 static char defaultDeviceName[32] = DEFAULT_DEVICE_NAME;
@@ -2225,6 +2225,18 @@ void handle_command(const String& json) {
                      ",\"cloud_ok\":" + String(rainmakerManagerIsCloudConnected() ? "true" : "false") + "}";
         pCharacteristic->setValue((uint8_t*)res.c_str(), res.length());
         pCharacteristic->notify();
+        return;
+    }
+
+    if (cmd == "rmaker_map_user") {
+        String uid = extract_json_string(json, "user_id");
+        String sec = extract_json_string(json, "secret_key");
+        if (uid.length() > 0) {
+            rainmakerManagerMapUser(uid.c_str(), sec.c_str());
+            String res = "{\"type\":\"rmaker_map_ack\",\"ok\":true}";
+            pCharacteristic->setValue((uint8_t*)res.c_str(), res.length());
+            pCharacteristic->notify();
+        }
         return;
     }
 

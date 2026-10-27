@@ -281,6 +281,7 @@ class _KelvinWarmthSliderState extends State<KelvinWarmthSlider> {
                       min: 2000,
                       max: 6500,
                       divisions: 45,
+                      semanticFormatterCallback: (val) => '${val.round()} Kelvin, ${_getWarmthLabel(val.round())}',
                       onChanged: (val) {
                         setState(() {
                           _currentKelvin = val;

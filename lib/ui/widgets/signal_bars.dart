@@ -23,24 +23,27 @@ class SignalBars extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bars = _activeBars;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(4, (i) {
-        final filled = i < bars;
-        return Padding(
-          padding: const EdgeInsets.only(right: 2.5),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 3.5,
-            height: 6.0 + (i * 3.5),
-            decoration: BoxDecoration(
-              color: filled ? color : color.withValues(alpha: 0.20),
-              borderRadius: BorderRadius.circular(1.0),
+    return Semantics(
+      label: 'Signal strength $bars of 4 bars, $rssi dBm',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: List.generate(4, (i) {
+          final filled = i < bars;
+          return Padding(
+            padding: const EdgeInsets.only(right: 2.5),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 3.5,
+              height: 6.0 + (i * 3.5),
+              decoration: BoxDecoration(
+                color: filled ? color : color.withValues(alpha: 0.20),
+                borderRadius: BorderRadius.circular(1.0),
+              ),
             ),
-          ),
-        );
-      }),
+          );
+        }),
+      ),
     );
   }
 }

@@ -12,7 +12,8 @@ class TempleLightsApp extends ConsumerWidget {
       title: 'Temple Lights',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.buildLight(),
-      themeMode: ThemeMode.light,
+      darkTheme: AppTheme.buildDark(),
+      themeMode: ThemeMode.system,
       home: const MainNavShell(),
     );
   }

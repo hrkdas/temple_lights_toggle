@@ -18,6 +18,9 @@ void rainmakerManagerUpdateDeviceName(const char* newName);
 void rainmakerManagerPauseForOta();
 void rainmakerManagerResumeAfterOta();
 
+// User-Node Association for Google Home & Cloud Control
+void rainmakerManagerMapUser(const char* userId, const char* secretKey);
+
 // Query Helpers
 bool rainmakerManagerIsRunning();
 bool rainmakerManagerIsCloudConnected();

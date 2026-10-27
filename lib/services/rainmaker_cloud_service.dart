@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import '../core/log.dart';
 
 final _log = AppLog.tag('rainmaker_cloud');
@@ -47,6 +48,28 @@ class RainmakerCloudService {
     );
   }
 
+  /// Extracts the OAuth authorization code from either a raw code string,
+  /// a callback URL (e.g. rainmaker://com.espressif.novahome/success?code=...),
+  /// or a query string.
+  static String extractOAuthCode(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed.contains('?')) {
+      try {
+        final uri = Uri.parse(trimmed);
+        final codeParam = uri.queryParameters['code'];
+        if (codeParam != null && codeParam.isNotEmpty) {
+          return codeParam.trim();
+        }
+      } catch (_) {}
+      final match = RegExp(r'[?&]code=([^&#\s]+)').firstMatch(trimmed);
+      if (match != null) {
+        return Uri.decodeQueryComponent(match.group(1)!).trim();
+      }
+    }
+    return trimmed;
+  }
+
   HttpClient _getClient() => _client ?? HttpClient();
 
   /// Exchanges a Google OAuth authorization code for Espressif RainMaker access tokens.
@@ -60,12 +83,14 @@ class RainmakerCloudService {
         'grant_type': 'authorization_code',
         'client_id': clientId,
         'redirect_uri': redirectUri,
-        'code': code,
+        'code': code.trim(),
       };
       final encoded = bodyParams.entries
           .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
           .join('&');
-      request.add(utf8.encode(encoded));
+      final bytes = utf8.encode(encoded);
+      request.contentLength = bytes.length;
+      request.add(bytes);
 
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
@@ -97,6 +122,17 @@ class RainmakerCloudService {
       }
 
       _log.w('OAuth token exchange failed with status ${response.statusCode}: $body');
+      try {
+        final errorMap = jsonDecode(body) as Map<String, dynamic>;
+        final desc = errorMap['error_description'] as String? ?? errorMap['error'] as String?;
+        if (desc != null && desc.isNotEmpty) {
+          return RainmakerLoginResponse(
+            isSuccess: false,
+            errorMessage: 'Auth error: $desc',
+          );
+        }
+      } catch (_) {}
+
       return RainmakerLoginResponse(
         isSuccess: false,
         errorMessage: 'Failed to exchange Google OAuth code (code ${response.statusCode})',
@@ -124,12 +160,14 @@ class RainmakerCloudService {
       final bodyParams = {
         'grant_type': 'refresh_token',
         'client_id': clientId,
-        'refresh_token': refreshToken,
+        'refresh_token': refreshToken.trim(),
       };
       final encoded = bodyParams.entries
           .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
           .join('&');
-      request.add(utf8.encode(encoded));
+      final bytes = utf8.encode(encoded);
+      request.contentLength = bytes.length;
+      request.add(bytes);
 
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
@@ -270,6 +308,13 @@ class RainmakerCloudService {
     }
   }
 
+  /// Generates a cryptographically secure 16-character alphanumeric secret key for node mapping.
+  static String generateSecretKey() {
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final rand = Random.secure();
+    return List.generate(16, (i) => chars[rand.nextInt(chars.length)]).join();
+  }
+
   /// Maps an ESP32 node to the user account in Espressif Cloud.
   Future<bool> mapNodeToUser({
     required String accessToken,
@@ -277,13 +322,16 @@ class RainmakerCloudService {
     String? secretKey,
   }) async {
     final client = _getClient();
+    final key = (secretKey != null && secretKey.trim().isNotEmpty)
+        ? secretKey.trim()
+        : generateSecretKey();
     try {
       final request = await client.putUrl(Uri.parse('$baseUrl/user/nodes/mapping'));
       request.headers.set('Authorization', accessToken);
       request.headers.set('Content-Type', 'application/json');
       request.add(utf8.encode(jsonEncode({
         'node_id': nodeId,
-        'secret_key': secretKey ?? '',
+        'secret_key': key,
         'operation': 'add',
       })));
 

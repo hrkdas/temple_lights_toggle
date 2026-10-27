@@ -114,6 +114,22 @@ class ConnectionCard extends StatelessWidget {
                   onPressed: onDisconnect,
                 ),
               ] else if (connState.isTargetPaired) ...[
+                if (!connState.isConnecting && !connState.isScanning && !connState.isReconnecting) ...[
+                  TextButton.icon(
+                    icon: const Icon(Icons.refresh_rounded, size: 14, color: AppTheme.amber),
+                    label: Text(
+                      'Reconnect',
+                      style: AppTheme.heading(size: 11, color: AppTheme.amber),
+                    ),
+                    onPressed: onScan,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 TextButton(
                   onPressed: onForget,
                   style: TextButton.styleFrom(
@@ -187,7 +203,7 @@ class ConnectionCard extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.wifi_tethering_rounded, size: 16, color: color),
+                  Icon(Icons.wifi_tethering_rounded, size: 16, color: connState.signalColor),
                   const SizedBox(width: 8),
                   Text(
                     'Signal: ${connState.signalQualityLabel} (${connState.rssi != null ? "${connState.rssi} dBm" : "Measuring..."})',
@@ -203,7 +219,7 @@ class ConnectionCard extends StatelessWidget {
                         value: signalPct / 100.0,
                         minHeight: 5,
                         backgroundColor: AppTheme.surface,
-                        valueColor: AlwaysStoppedAnimation<Color>(color),
+                        valueColor: AlwaysStoppedAnimation<Color>(connState.signalColor),
                       ),
                     ),
                   ),

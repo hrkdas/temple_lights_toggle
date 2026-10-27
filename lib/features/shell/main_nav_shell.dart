@@ -63,8 +63,11 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
     super.dispose();
   }
 
+  bool _barsVisible = true;
+
   void _showBars() {
-    if (_barsVisibilityController.value < 1.0 && !_barsVisibilityController.isAnimating) {
+    if (!_barsVisible || _barsVisibilityController.value < 1.0) {
+      _barsVisible = true;
       _barsVisibilityController.animateTo(
         1.0,
         duration: const Duration(milliseconds: 450), // Smooth and slow return
@@ -74,13 +77,20 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
   }
 
   void _hideBars() {
-    if (_barsVisibilityController.value > 0.0 && !_barsVisibilityController.isAnimating) {
+    if (_barsVisible || _barsVisibilityController.value > 0.0) {
+      _barsVisible = false;
       _barsVisibilityController.animateTo(
         0.0,
-        duration: const Duration(milliseconds: 320), // Responsive exit
-        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 280), // Responsive exit
+        curve: Curves.easeInCubic,
       );
     }
+  }
+
+  Color _signalColor(int rssi) {
+    if (rssi >= -70) return AppTheme.green;
+    if (rssi >= -85) return AppTheme.amber;
+    return AppTheme.red;
   }
 
   void _openDevicePicker() {
@@ -160,6 +170,7 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
                       backgroundColor: Colors.transparent,
                       elevation: 0,
                       scrolledUnderElevation: 0,
+                      titleSpacing: 10,
                       title: InkWell(
                         onTap: _openDevicePicker,
                         borderRadius: BorderRadius.circular(10),
@@ -169,8 +180,8 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Container(
-                                width: 30,
-                                height: 30,
+                                width: 28,
+                                height: 28,
                                 decoration: BoxDecoration(
                                   color: AppTheme.surfaceRaised,
                                   borderRadius: BorderRadius.circular(8),
@@ -186,56 +197,55 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
                                   borderRadius: BorderRadius.circular(7),
                                   child: Image.asset(
                                     'assets/icons/temple_icon.png',
-                                    width: 30,
-                                    height: 30,
+                                    width: 28,
+                                    height: 28,
                                     fit: BoxFit.cover,
                                     errorBuilder: (_, __, ___) => const Icon(Icons.temple_hindu_rounded, color: AppTheme.amber, size: 18),
                                   ),
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 160),
+                              Flexible(
                                 child: Text(
                                   _currentIndex == 0 ? (activeDevice?.displayName ?? _appBarTitle) : _appBarTitle,
-                                  style: AppTheme.heading(size: 14, letterSpacing: 1.2),
+                                  style: AppTheme.heading(size: 13.5, letterSpacing: 0.8),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                               if (_currentIndex == 0) ...[
                                 const SizedBox(width: 2),
-                                const Icon(Icons.arrow_drop_down_rounded, color: AppTheme.amber, size: 20),
+                                const Icon(Icons.arrow_drop_down_rounded, color: AppTheme.amber, size: 18),
                               ],
                               const SizedBox(width: 6),
                               // Live Status Indicator Dot
                               Container(
-                                width: 8,
-                                height: 8,
+                                width: 7,
+                                height: 7,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   color: statusColor,
                                   boxShadow: [
                                     BoxShadow(
                                       color: statusColor.withValues(alpha: 0.8),
-                                      blurRadius: 5,
+                                      blurRadius: 4,
                                       spreadRadius: 1,
                                     ),
                                   ],
                                 ),
                               ),
                               if (conn.isConnected && conn.rssi != null) ...[
-                                const SizedBox(width: 6),
+                                const SizedBox(width: 5),
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                                   decoration: BoxDecoration(
                                     color: AppTheme.surfaceRaised,
-                                    borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+                                    borderRadius: BorderRadius.circular(5),
+                                    border: Border.all(color: _signalColor(conn.rssi!).withValues(alpha: 0.4)),
                                   ),
                                   child: Text(
                                     '${conn.rssi} dBm',
-                                    style: AppTheme.heading(size: 10, color: statusColor),
+                                    style: AppTheme.heading(size: 9.5, color: _signalColor(conn.rssi!)),
                                   ),
                                 ),
                               ],
@@ -253,6 +263,9 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
                                 ? AppTheme.green
                                 : (isConnecting ? AppTheme.amber : AppTheme.textSecondary);
                             return IconButton(
+                              iconSize: 20,
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                               icon: Icon(
                                 isConnected ? Icons.wifi_rounded : (isConnecting ? Icons.wifi_find_rounded : Icons.wifi_rounded),
                                 color: iconColor,
@@ -264,17 +277,46 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
                             );
                           },
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.bluetooth_searching_rounded, color: AppTheme.amber),
-                          tooltip: 'Devices',
-                          onPressed: _openDevicePicker,
+                        Consumer(
+                          builder: (context, ref, _) {
+                            final conn = ref.watch(lightSessionProvider);
+                            final IconData bIcon;
+                            final Color bColor;
+                            final String bTooltip;
+
+                            if (conn.isConnected) {
+                              bIcon = Icons.bluetooth_connected_rounded;
+                              bColor = AppTheme.amber;
+                              bTooltip = 'Connected to ${conn.deviceName ?? "Temple Lights"}';
+                            } else if (conn.isScanning || conn.isConnecting || conn.isReconnecting) {
+                              bIcon = Icons.bluetooth_searching_rounded;
+                              bColor = AppTheme.gold;
+                              bTooltip = conn.isScanning ? 'Searching for lights...' : 'Reconnecting...';
+                            } else {
+                              bIcon = Icons.bluetooth_disabled_rounded;
+                              bColor = AppTheme.textSecondary;
+                              bTooltip = 'Disconnected (Tap to scan)';
+                            }
+
+                            return IconButton(
+                              iconSize: 20,
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                              icon: Icon(bIcon, color: bColor),
+                              tooltip: bTooltip,
+                              onPressed: _openDevicePicker,
+                            );
+                          },
                         ),
                         IconButton(
+                          iconSize: 20,
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                           icon: const Icon(Icons.tune_rounded, color: AppTheme.textSecondary),
                           tooltip: 'Settings',
                           onPressed: _openSettings,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                       ],
                     ),
                   ),
@@ -284,38 +326,41 @@ class _MainNavShellState extends ConsumerState<MainNavShell> with SingleTickerPr
           ),
         ),
       ),
-      body: NotificationListener<UserScrollNotification>(
+      body: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification.metrics.axis == Axis.vertical) {
-            if (notification.direction == ScrollDirection.reverse) {
-              _hideBars();
-            } else if (notification.direction == ScrollDirection.forward) {
+            if (notification.metrics.pixels <= 15.0) {
               _showBars();
+            } else if (notification is ScrollUpdateNotification && notification.scrollDelta != null) {
+              final delta = notification.scrollDelta!;
+              if (delta > 3.0) {
+                _hideBars();
+              } else if (delta < -3.0) {
+                _showBars();
+              }
+            } else if (notification is UserScrollNotification) {
+              if (notification.direction == ScrollDirection.forward) {
+                _showBars();
+              } else if (notification.direction == ScrollDirection.reverse && notification.metrics.pixels > 20.0) {
+                _hideBars();
+              }
             }
           }
           return false;
         },
-        child: NotificationListener<ScrollUpdateNotification>(
-          onNotification: (notification) {
-            if (notification.metrics.axis == Axis.vertical && notification.metrics.pixels <= 15.0) {
-              _showBars();
-            }
-            return false;
+        child: PageView(
+          controller: _pageController,
+          physics: const BouncingScrollPhysics(),
+          onPageChanged: (index) {
+            _showBars();
+            setState(() => _currentIndex = index);
           },
-          child: PageView(
-            controller: _pageController,
-            physics: const BouncingScrollPhysics(),
-            onPageChanged: (index) {
-              _showBars();
-              setState(() => _currentIndex = index);
-            },
-            children: const [
-              LightsScreen(),
-              ModesScreen(),
-              ScheduleScreen(),
-              LogsScreen(),
-            ],
-          ),
+          children: const [
+            LightsScreen(),
+            ModesScreen(),
+            ScheduleScreen(),
+            LogsScreen(),
+          ],
         ),
       ),
       bottomNavigationBar: SlideTransition(

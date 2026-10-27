@@ -25,7 +25,7 @@ class _AutoOffTimerWidgetState extends ConsumerState<AutoOffTimerWidget>
   late final AnimationController _pulseController = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1200),
-  )..repeat(reverse: true);
+  );
 
   static const List<int> _presetMinutes = [10, 15, 20, 30];
 
@@ -91,6 +91,15 @@ class _AutoOffTimerWidgetState extends ConsumerState<AutoOffTimerWidget>
     final timerState = ref.watch(autoOffTimerProvider);
     final notifier = ref.read(autoOffTimerProvider.notifier);
     final isRunning = timerState.isRunning;
+
+    if (isRunning) {
+      if (!_pulseController.isAnimating) _pulseController.repeat(reverse: true);
+    } else {
+      if (_pulseController.isAnimating) {
+        _pulseController.stop();
+        _pulseController.value = 0.0;
+      }
+    }
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 260),

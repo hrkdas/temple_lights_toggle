@@ -132,38 +132,42 @@ class _SplitTileCardState extends State<SplitTileCard> {
                   child: Row(
                     children: [
                       // --- Left Split-Tile: Power Icon Button ---
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          AppHaptics.medium();
-                          widget.onTogglePower();
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: isDeviceActive
-                                ? widget.color.withValues(alpha: 0.25)
-                                : const Color(0xFF231F1A),
-                            border: Border.all(
-                              color: isDeviceActive ? widget.color : AppTheme.border,
-                              width: 1.5,
+                      Semantics(
+                        button: true,
+                        label: 'Power toggle for ${widget.name}, currently ${isDeviceActive ? "On at $_brightnessPct%" : "Off"}',
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            AppHaptics.medium();
+                            widget.onTogglePower();
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: isDeviceActive
+                                  ? widget.color.withValues(alpha: 0.25)
+                                  : AppTheme.surfaceRaised,
+                              border: Border.all(
+                                color: isDeviceActive ? widget.color : AppTheme.border,
+                                width: 1.5,
+                              ),
+                              boxShadow: isDeviceActive
+                                  ? [
+                                      BoxShadow(
+                                        color: widget.color.withValues(alpha: 0.35),
+                                        blurRadius: 10,
+                                      ),
+                                    ]
+                                  : null,
                             ),
-                            boxShadow: isDeviceActive
-                                ? [
-                                    BoxShadow(
-                                      color: widget.color.withValues(alpha: 0.35),
-                                      blurRadius: 10,
-                                    ),
-                                  ]
-                                : null,
-                          ),
-                          child: Icon(
-                            Icons.power_settings_new_rounded,
-                            size: 22,
-                            color: isDeviceActive ? widget.color : AppTheme.textMuted,
+                            child: Icon(
+                              Icons.power_settings_new_rounded,
+                              size: 22,
+                              color: isDeviceActive ? widget.color : AppTheme.textMuted,
+                            ),
                           ),
                         ),
                       ),

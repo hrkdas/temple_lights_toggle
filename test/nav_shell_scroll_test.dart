@@ -99,5 +99,27 @@ void main() {
 
       await tester.pump(const Duration(milliseconds: 500));
     });
+
+    testWidgets('Rapid direction reversal mid-animation smoothly reveals bars without getting stuck', (tester) async {
+      await tester.pumpWidget(createTestApp());
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final scrollView = find.byType(SingleChildScrollView).first;
+
+      // Start scrolling down
+      await tester.drag(scrollView, const Offset(0, -200));
+      // Pump only 50ms (in the middle of hide animation)
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Immediately reverse and scroll up before hide completes
+      await tester.drag(scrollView, const Offset(0, 200));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Bars must be fully visible again without being locked out
+      expect(find.text('TEMPLE LIGHTS'), findsOneWidget);
+      expect(find.text('LIGHTS'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 500));
+    });
   });
 }

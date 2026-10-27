@@ -120,6 +120,59 @@ class AppTheme {
     );
   }
 
-  // Alias for compatibility
-  static ThemeData buildDark() => buildLight();
+  // === Dark Surfaces (Sacred Night & Warm Sandalwood) ===
+  static const Color darkBackground = Color(0xFF141210);      // Deep Sacred Night
+  static const Color darkSurface = Color(0xFF1F1B18);         // Sandalwood Stone
+  static const Color darkSurfaceRaised = Color(0xFF2C2622);   // Carved Wood Altar
+  static const Color darkBorder = Color(0xFF38312B);          // Muted Brass Border
+  static const Color darkBorderBright = Color(0xFF4F453D);    // Soft Golden Rim
+  static const Color darkTextPrimary = Color(0xFFF7F3EB);     // Radiant Ivory Cream
+  static const Color darkTextSecondary = Color(0xFFB0A699);   // Warm Sandstone
+  static const Color darkTextMuted = Color(0xFF7D7366);       // Deep Pebble
+
+  // === Dark ThemeData Factory ===
+  static ThemeData buildDark() {
+    final base = ThemeData(
+      brightness: Brightness.dark,
+      useMaterial3: true,
+      scaffoldBackgroundColor: darkBackground,
+      colorScheme: const ColorScheme.dark(
+        surface: darkSurface,
+        onSurface: darkTextPrimary,
+        primary: amber,
+        onPrimary: Color(0xFFFFFFFF),
+        secondary: gold,
+        onSecondary: Color(0xFFFFFFFF),
+        error: red,
+        onError: Color(0xFFFFFFFF),
+      ),
+    );
+
+    return base.copyWith(
+      textTheme: GoogleFonts.rubikTextTheme(base.textTheme).copyWith(
+        displayLarge: heading(size: 40, color: darkTextPrimary),
+        displayMedium: heading(size: 32, color: darkTextPrimary),
+        headlineMedium: heading(size: 24, color: darkTextPrimary),
+        titleLarge: heading(size: 18, color: darkTextPrimary),
+        bodyLarge: body(size: 16, color: darkTextPrimary),
+        bodyMedium: body(size: 14, color: darkTextPrimary),
+        labelLarge: body(size: 12, color: darkTextPrimary, weight: FontWeight.w600),
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: darkBackground,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        iconTheme: IconThemeData(color: darkTextPrimary),
+      ),
+      cardTheme: CardThemeData(
+        color: darkSurface,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: darkBorder, width: 1.0),
+        ),
+      ),
+    );
+  }
 }

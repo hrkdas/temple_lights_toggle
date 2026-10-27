@@ -31,12 +31,15 @@
         </activity>
         <activity
             android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
-            android:exported="true">
-            <intent-filter android:autoVerify="true">
+            android:exported="true"
+            android:taskAffinity="">
+            <intent-filter android:label="flutter_web_auth_2">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="rainmaker" />
+                <data android:scheme="rainmaker" android:host="com.espressif.novahome" android:pathPrefix="/success" />
+                <data android:scheme="rainmaker" android:host="com.espressif.rainmaker" android:pathPrefix="/success" />
             </intent-filter>
         </activity>
         <meta-data

@@ -60,62 +60,75 @@ class _StatusPillState extends State<StatusPill> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     final color = _statusColor;
+    final shouldAnimate = widget.isRelayOn || widget.connState.isConnecting || widget.connState.isScanning;
+    if (shouldAnimate) {
+      if (!_pulseController.isAnimating) _pulseController.repeat(reverse: true);
+    } else {
+      if (_pulseController.isAnimating) {
+        _pulseController.stop();
+        _pulseController.value = 0.0;
+      }
+    }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: color.withValues(alpha: 0.35),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: color.withValues(alpha: 0.12),
-            blurRadius: 10,
-            spreadRadius: 1,
+    return Semantics(
+      liveRegion: true,
+      label: 'Relay and connection status: $_statusText',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: color.withValues(alpha: 0.35),
+            width: 1.2,
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedBuilder(
-            animation: _pulseController,
-            builder: (context, _) {
-              final scale = widget.isRelayOn || widget.connState.isConnecting
-                  ? 0.8 + (_pulseController.value * 0.4)
-                  : 1.0;
-              final glowAlpha = widget.isRelayOn ? 0.8 : 0.4;
-
-              return Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color,
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withValues(alpha: glowAlpha),
-                      blurRadius: 6 * scale,
-                      spreadRadius: 2 * scale,
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-          const SizedBox(width: 10),
-          Text(
-            _statusText,
-            style: AppTheme.heading(
-              size: 11.5,
-              color: color,
-              letterSpacing: 1.2,
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.12),
+              blurRadius: 10,
+              spreadRadius: 1,
             ),
-          ),
-        ],
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedBuilder(
+              animation: _pulseController,
+              builder: (context, _) {
+                final scale = shouldAnimate
+                    ? 0.8 + (_pulseController.value * 0.4)
+                    : 1.0;
+                final glowAlpha = widget.isRelayOn ? 0.8 : 0.4;
+
+                return Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color,
+                    boxShadow: [
+                      BoxShadow(
+                        color: color.withValues(alpha: glowAlpha),
+                        blurRadius: 6 * scale,
+                        spreadRadius: 2 * scale,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 10),
+            Text(
+              _statusText,
+              style: AppTheme.heading(
+                size: 11.5,
+                color: color,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

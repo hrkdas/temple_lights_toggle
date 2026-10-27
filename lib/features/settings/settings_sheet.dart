@@ -243,6 +243,21 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                 const SizedBox(height: 10),
                 Text(localError!, style: AppTheme.body(size: 11, color: AppTheme.red)),
               ],
+              const SizedBox(height: 10),
+              Center(
+                child: TextButton.icon(
+                  icon: const Icon(Icons.link_rounded, size: 14),
+                  label: const Text('Trouble redirecting? Enter code or URL manually'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.textMuted,
+                    textStyle: AppTheme.body(size: 11),
+                  ),
+                  onPressed: () {
+                    Navigator.of(dlgCtx).pop();
+                    _showManualCodeEntryDialog(context);
+                  },
+                ),
+              ),
             ],
           ),
           actions: [
@@ -294,8 +309,137 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     );
   }
 
+  void _showManualCodeEntryDialog(BuildContext context) {
+    AppHaptics.light();
+    final urlController = TextEditingController();
+    bool isSubmitting = false;
+    String? localError;
+
+    showDialog<void>(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDlgState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.cyan.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.link_rounded, color: AppTheme.cyan, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Paste Callback URL', style: AppTheme.heading(size: 16)),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'If your browser did not return automatically after Google sign-in, copy the URL or code from the browser address bar and paste it below:',
+                style: AppTheme.body(size: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: urlController,
+                maxLines: 2,
+                style: AppTheme.mono(size: 11),
+                decoration: InputDecoration(
+                  hintText: 'rainmaker://com.espressif.novahome/success?code=... or authorization code',
+                  hintStyle: AppTheme.mono(size: 10, color: AppTheme.textMuted),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.paste_rounded, size: 18),
+                    tooltip: 'Paste from clipboard',
+                    onPressed: () async {
+                      final data = await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null && data!.text!.isNotEmpty) {
+                        urlController.text = data.text!.trim();
+                      }
+                    },
+                  ),
+                ),
+              ),
+              if (localError != null) ...[
+                const SizedBox(height: 10),
+                Text(localError!, style: AppTheme.body(size: 11, color: AppTheme.red)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dlgCtx).pop(),
+              child: Text('Cancel', style: AppTheme.body(size: 13, color: AppTheme.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.amber,
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final text = urlController.text.trim();
+                      if (text.isEmpty) {
+                        setDlgState(() => localError = 'Please paste the URL or authorization code.');
+                        return;
+                      }
+                      setDlgState(() {
+                        isSubmitting = true;
+                        localError = null;
+                      });
+
+                      final ok = await ref.read(rainmakerAuthProvider.notifier).loginWithOAuthCode(text);
+                      if (context.mounted) {
+                        if (ok) {
+                          Navigator.of(dlgCtx).pop();
+                          AppHaptics.success();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Signed in with Google & linked to Espressif Cloud!'),
+                              backgroundColor: AppTheme.green,
+                            ),
+                          );
+                        } else {
+                          final err = ref.read(rainmakerAuthProvider).errorMessage ?? 'Invalid code or exchange failed.';
+                          setDlgState(() {
+                            isSubmitting = false;
+                            localError = err;
+                          });
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : Text('Verify & Link', style: AppTheme.heading(size: 13, color: Colors.black)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showGoogleHomeGuide(BuildContext context) {
     AppHaptics.light();
+    final client = ref.read(bleClientProvider);
+    if (client.isConnected) {
+      final settings = ref.read(settingsProvider);
+      try {
+        client.writeWithoutResponse(
+          LightPacketEncoder.encodeGetRmakerInfo(),
+          serviceUuid: settings.customServiceUuid,
+          charUuid: settings.customCharUuid,
+        );
+      } catch (_) {}
+    }
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -384,30 +528,60 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                             ],
                           ),
                           if (nodeId != null && nodeId.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text('Device Node: $nodeId', style: AppTheme.mono(size: 11, color: AppTheme.textSecondary)),
+                            if (auth.nodes.contains(nodeId)) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.green.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: AppTheme.green.withValues(alpha: 0.4)),
                                 ),
-                                ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppTheme.green,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.cloud_done_rounded, size: 16, color: AppTheme.green),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Google Home Ready ($nodeId)',
+                                        style: AppTheme.heading(size: 11, color: AppTheme.green),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ] else ...[
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text('Device Node: $nodeId', style: AppTheme.mono(size: 11, color: AppTheme.textSecondary)),
                                   ),
-                                  onPressed: () async {
-                                    final ok = await ref.read(rainmakerAuthProvider.notifier).mapActiveDevice(nodeId: nodeId);
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text(ok ? 'Device successfully linked to account!' : 'Failed to link device.')),
-                                      );
-                                    }
-                                  },
-                                  child: Text('Bind Light', style: AppTheme.heading(size: 11, color: Colors.white)),
-                                ),
-                              ],
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppTheme.green,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    ),
+                                    onPressed: () async {
+                                      final ok = await ref.read(rainmakerAuthProvider.notifier).mapActiveDevice(nodeId: nodeId);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text(ok ? 'Device successfully linked to account!' : 'Failed to link device.')),
+                                        );
+                                      }
+                                    },
+                                    child: Text('Bind Light', style: AppTheme.heading(size: 11, color: Colors.white)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ] else ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              'Connect to your light over BLE to pair it with this Espressif account.',
+                              style: AppTheme.body(size: 11, color: AppTheme.textMuted),
                             ),
                           ],
                         ],
@@ -460,7 +634,15 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                     final err = ref.read(rainmakerAuthProvider).errorMessage;
                                     if (err != null) {
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text(err), backgroundColor: AppTheme.red),
+                                        SnackBar(
+                                          content: Text(err),
+                                          backgroundColor: AppTheme.red,
+                                          action: SnackBarAction(
+                                            label: 'Paste Link',
+                                            textColor: Colors.white,
+                                            onPressed: () => _showManualCodeEntryDialog(context),
+                                          ),
+                                        ),
                                       );
                                     }
                                   }
@@ -481,6 +663,18 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               onPressed: () => _showRainmakerLoginDialog(context),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Center(
+                            child: TextButton.icon(
+                              icon: const Icon(Icons.link_rounded, size: 14),
+                              label: const Text('Trouble redirecting? Paste sign-in link'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppTheme.textMuted,
+                                textStyle: AppTheme.body(size: 11),
+                              ),
+                              onPressed: () => _showManualCodeEntryDialog(context),
                             ),
                           ),
                         ],

@@ -75,6 +75,8 @@ class BleClient {
             }
           }
         } else if (update.connectionState == DeviceConnectionState.disconnected) {
+          _deviceId = null;
+          _discoveredServices = [];
           if (!readyCompleter.isCompleted) {
             readyCompleter.completeError(
               StateError('Disconnected before connection established: ${update.failure}'),

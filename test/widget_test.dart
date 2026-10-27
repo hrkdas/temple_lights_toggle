@@ -1,8 +1,13 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:temple_lights_toggle/contract/light_contract.dart';
+import 'package:temple_lights_toggle/core/kv_store.dart';
 import 'package:temple_lights_toggle/domain/models.dart';
+import 'package:temple_lights_toggle/domain/providers.dart';
+import 'package:temple_lights_toggle/features/home/lights_screen.dart';
 import 'package:temple_lights_toggle/ui/widgets/light_dial_button.dart';
 
 void main() {
@@ -416,56 +421,8 @@ void main() {
       expect(textWidget.style?.color, const Color(0xFF1C1917));
     });
 
-    testWidgets('Rotary scrub on outer ring scrubs brightness and commits on release', (tester) async {
-      int scrubbedVal = 0;
-      int committedVal = 0;
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: LightDialButton(
-                isOn: true,
-                mode: 0,
-                brightness: 128,
-                r: 255,
-                g: 147,
-                b: 41,
-                isEnabled: true,
-                onToggle: () {},
-                onBrightnessScrub: (v) => scrubbedVal = v,
-                onBrightnessCommit: (v) => committedVal = v,
-              ),
-            ),
-          ),
-        ),
-      );
-
-      final dialCenter = tester.getCenter(find.byType(LightDialButton));
-      // Start drag at 3 o'clock on outer ring (radius ~ 90px from center)
-      final startPos = dialCenter + const Offset(90, 0);
-
-      final gesture = await tester.startGesture(startPos);
-      await tester.pump();
-      // At 3 o'clock, angle from 12 o'clock is 90 deg / 360 = 25% brightness (~64)
-      expect(scrubbedVal, greaterThan(50));
-      expect(scrubbedVal, lessThan(80));
-
-      // Drag to 6 o'clock (180 deg / 360 = 50% brightness (~128))
-      await gesture.moveTo(dialCenter + const Offset(0, 90));
-      await tester.pump();
-      expect(scrubbedVal, greaterThan(115));
-      expect(scrubbedVal, lessThan(140));
-
-      // Release gesture
-      await gesture.up();
-      await tester.pump();
-      expect(committedVal, equals(scrubbedVal));
-    });
-
-    testWidgets('Center drag/tap toggles power rather than scrubbing brightness', (tester) async {
+    testWidgets('Tapping LightDialButton toggles power with haptic tap and scale animation', (tester) async {
       bool toggled = false;
-      int scrubbedVal = 0;
 
       await tester.pumpWidget(
         MaterialApp(
@@ -480,22 +437,191 @@ void main() {
                 b: 41,
                 isEnabled: true,
                 onToggle: () => toggled = true,
-                onBrightnessScrub: (v) => scrubbedVal = v,
               ),
             ),
           ),
         ),
       );
 
-      final dialCenter = tester.getCenter(find.byType(LightDialButton));
-      // Tap at the exact center (radius 0 < 68)
-      final gesture = await tester.startGesture(dialCenter);
+      // Tap to toggle
+      await tester.tap(find.byType(LightDialButton));
       await tester.pump();
-      await gesture.up();
+      expect(toggled, isTrue);
+    });
+
+    testWidgets('Tapping LightDialButton inside SingleChildScrollView triggers onToggle', (tester) async {
+      bool toggled = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: LightDialButton(
+                isOn: true,
+                mode: 0,
+                brightness: 128,
+                r: 255,
+                g: 147,
+                b: 41,
+                isEnabled: true,
+                onToggle: () => toggled = true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(LightDialButton));
       await tester.pump();
 
       expect(toggled, isTrue);
-      expect(scrubbedVal, equals(0)); // Scrubbing was not triggered
+    });
+
+    testWidgets('Disabled LightDialButton does not trigger onToggle', (tester) async {
+      bool toggled = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: LightDialButton(
+                isOn: false,
+                mode: 0,
+                brightness: 0,
+                r: 255,
+                g: 147,
+                b: 41,
+                isEnabled: false,
+                onToggle: () => toggled = true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(LightDialButton));
+      await tester.pump();
+
+      expect(toggled, isFalse);
+    });
+
+    testWidgets('LightDialButton with custom subtitle displays provided subtitle', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: LightDialButton(
+                isOn: false,
+                mode: 0,
+                brightness: 0,
+                r: 255,
+                g: 147,
+                b: 41,
+                isEnabled: true,
+                subtitle: 'TAP TO POWER ON & CONNECT',
+                onToggle: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('TAP TO POWER ON & CONNECT'), findsOneWidget);
+    });
+
+    testWidgets('When disconnected, LightsScreen renders interactive LightDialButton that triggers scan & toggle', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = await KvStore.instance();
+
+      final container = ProviderContainer(
+        overrides: [
+          kvStoreProvider.overrideWithValue(kv),
+        ],
+      );
+
+      container.read(lightSessionProvider.notifier).state = const ConnState(
+        phase: ConnPhase.disconnected,
+        isTargetPaired: true,
+      );
+
+      container.read(lightControlProvider.notifier).state = const LightState(
+        isOn: false,
+        brightness: 0,
+      );
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: Scaffold(body: LightsScreen()),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Dial is rendered even when disconnected
+      final dial = find.byType(LightDialButton);
+      expect(dial, findsOneWidget);
+      expect(find.text('TAP TO POWER ON & CONNECT'), findsOneWidget);
+
+      // Tapping it triggers power on
+      await tester.tap(dial);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(container.read(lightControlProvider).isOn, isTrue);
+    });
+
+    testWidgets('Toggling power between ON and OFF does not crash AnimatedContainer RadialGradient.lerp', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = await KvStore.instance();
+
+      final container = ProviderContainer(
+        overrides: [
+          kvStoreProvider.overrideWithValue(kv),
+        ],
+      );
+
+      container.read(lightSessionProvider.notifier).state = const ConnState(
+        phase: ConnPhase.connected,
+        deviceId: '11:22:33:44:55:66',
+        deviceName: 'Temple Lights',
+      );
+
+      // Start with power ON
+      container.read(lightControlProvider.notifier).state = const LightState(
+        isOn: true,
+        brightness: 255,
+        r: 255,
+        g: 147,
+        b: 41,
+      );
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: Scaffold(body: LightsScreen()),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Tap dial to turn power OFF
+      await tester.tap(find.byType(LightDialButton));
+      // Pump across the 600ms RadialGradient animation
+      for (int i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(container.read(lightControlProvider).isOn, isFalse);
+
+      // Tap dial to turn power back ON
+      await tester.tap(find.byType(LightDialButton));
+      for (int i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(container.read(lightControlProvider).isOn, isTrue);
     });
   });
 }

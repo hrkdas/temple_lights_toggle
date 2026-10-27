@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -67,7 +68,11 @@ class LightsScreen extends ConsumerWidget {
                           Color.fromARGB(255, light.r, light.g, light.b).withValues(alpha: 0.03),
                           Colors.transparent,
                         ]
-                      : [Colors.transparent, Colors.transparent],
+                      : const [
+                          Colors.transparent,
+                          Colors.transparent,
+                          Colors.transparent,
+                        ],
                   stops: const [0.0, 0.55, 1.0],
                 ),
               ),
@@ -95,13 +100,13 @@ class LightsScreen extends ConsumerWidget {
               ],
 
               // Spatial Sanctuary Header (Streamlined Room Bar, Status & Quick Scenes)
-              if (conn.isConnected && (rooms.isNotEmpty || paired.isNotEmpty || scenes.isNotEmpty)) ...[
+              if (rooms.isNotEmpty || paired.isNotEmpty || scenes.isNotEmpty) ...[
                 _buildSpatialSanctuaryHeader(paired, light, conn, rooms, activeRoomId, scenes, ref),
                 const SizedBox(height: 12),
               ],
 
               // Room Hero Card (when a specific room is selected and has devices)
-              if (conn.isConnected && activeRoom != null && devicesInActiveRoom.isNotEmpty) ...[
+              if (activeRoom != null && devicesInActiveRoom.isNotEmpty) ...[
                 _buildRoomHeroCard(activeRoom, devicesInActiveRoom, ref),
                 const SizedBox(height: 12),
               ],
@@ -501,211 +506,215 @@ class LightsScreen extends ConsumerWidget {
     String? activeRoomId,
     WidgetRef ref,
   ) {
-    // 1. Scanning State -> Radar Sweep
-    if (conn.isScanning) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const RadarSweep(size: 210),
-          const SizedBox(height: 22),
-          Text(
-            conn.isTargetPaired ? 'LOCATING TEMPLE LIGHTS...' : 'SEARCHING FOR LIGHTS...',
-            style: AppTheme.heading(size: 15, color: AppTheme.amber, letterSpacing: 1.8),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            conn.isTargetPaired
-                ? 'Standing by to link as soon as strip is powered on'
-                : 'Will auto-connect to nearest Temple Lights strip',
-            textAlign: TextAlign.center,
-            style: AppTheme.body(size: 12.5, color: AppTheme.textMuted),
-          ),
-          const SizedBox(height: 18),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.list_alt_rounded, size: 18, color: AppTheme.amber),
-            label: Text('Select Manually', style: AppTheme.heading(size: 12, color: AppTheme.amber)),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppTheme.borderBright),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            onPressed: () => _openDevicePicker(context),
-          ),
-        ],
-      ).animate().fadeIn(duration: 300.ms);
-    }
+    final hasPaired = paired.isNotEmpty || conn.isTargetPaired || conn.isConnected;
 
-    // 2. Connecting / Reconnecting State
-    if (conn.isConnecting || conn.isReconnecting) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 80,
-            height: 80,
-            child: CircularProgressIndicator(
-              strokeWidth: 3.5,
-              valueColor: AlwaysStoppedAnimation(
-                conn.isReconnecting ? AppTheme.gold : AppTheme.amber,
+    // Fresh first-launch with zero paired devices
+    if (!hasPaired) {
+      if (conn.isScanning) {
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const RadarSweep(size: 210),
+            const SizedBox(height: 22),
+            Text(
+              'SEARCHING FOR LIGHTS...',
+              style: AppTheme.heading(size: 15, color: AppTheme.amber, letterSpacing: 1.8),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Will auto-connect to nearest Temple Lights strip',
+              textAlign: TextAlign.center,
+              style: AppTheme.body(size: 12.5, color: AppTheme.textMuted),
+            ),
+            const SizedBox(height: 18),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.list_alt_rounded, size: 18, color: AppTheme.amber),
+              label: Text('Select Manually', style: AppTheme.heading(size: 12, color: AppTheme.amber)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppTheme.borderBright),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => _openDevicePicker(context),
+            ),
+          ],
+        ).animate().fadeIn(duration: 300.ms);
+      }
+
+      if (conn.isConnecting) {
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(
+              width: 80,
+              height: 80,
+              child: CircularProgressIndicator(
+                strokeWidth: 3.5,
+                valueColor: AlwaysStoppedAnimation(AppTheme.amber),
               ),
             ),
-          ),
-          const SizedBox(height: 22),
+            const SizedBox(height: 22),
+            Text(
+              'ESTABLISHING BLE LINK...',
+              style: AppTheme.heading(size: 15, color: AppTheme.amber, letterSpacing: 1.5),
+            ),
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                'Negotiating GATT connection with ${conn.deviceName ?? "Temple Lights"}...',
+                textAlign: TextAlign.center,
+                style: AppTheme.body(size: 12.5, color: AppTheme.textSecondary),
+              ),
+            ),
+          ],
+        ).animate().fadeIn(duration: 250.ms);
+      }
+
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.temple_hindu_rounded, size: 72, color: AppTheme.amber),
+          const SizedBox(height: 16),
           Text(
-            conn.isReconnecting ? 'AUTO-RECONNECTING...' : 'ESTABLISHING BLE LINK...',
-            style: AppTheme.heading(
-              size: 15,
-              color: conn.isReconnecting ? AppTheme.gold : AppTheme.amber,
-              letterSpacing: 1.5,
-            ),
+            'NO LIGHTS PAIRED',
+            style: AppTheme.heading(size: 16, color: AppTheme.amber, letterSpacing: 1.5),
           ),
-          const SizedBox(height: 6),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              conn.isReconnecting
-                  ? 'Device is out of range or rebooting. The app will auto-link continuously.'
-                  : 'Negotiating GATT connection with ${conn.deviceName ?? "Temple Lights"}...',
-              textAlign: TextAlign.center,
-              style: AppTheme.body(size: 12.5, color: AppTheme.textSecondary),
+          const SizedBox(height: 8),
+          Text(
+            'Power on your Temple Lights controller to begin pairing',
+            textAlign: TextAlign.center,
+            style: AppTheme.body(size: 13, color: AppTheme.textMuted),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.bluetooth_searching_rounded),
+            label: const Text('SEARCH FOR DEVICES'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.amber,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
+            onPressed: () => session.startAutoDiscovery(),
           ),
         ],
       ).animate().fadeIn(duration: 250.ms);
     }
 
-    // 3. Connected State -> Split-Tile Card, Dial, Mode Selector, Kelvin Slider, Brightness, RGB Color & Auto-Off Timer
+    // Devices are paired: ALWAYS render the full sanctuary controls
+    final activeDev = ref.watch(activeDeviceProvider) ?? paired.firstOrNull;
+    final activeRoom = activeDev != null
+        ? rooms.where((r) => r.id == activeDev.effectiveRoomId).firstOrNull
+        : null;
+    final roomName = activeRoom?.name ?? 'Puja Mandir';
+
+    final String connectionStatusLabel;
     if (conn.isConnected) {
-      final activeDev = paired.where((d) => d.id == conn.deviceId).firstOrNull;
-      final activeRoom = activeDev != null
-          ? rooms.where((r) => r.id == activeDev.effectiveRoomId).firstOrNull
-          : null;
-      final roomLabel = activeRoom?.name ?? 'Puja Mandir';
-
-      return Column(
-        children: [
-          // Center Porcelain Power Dial with Rotary Touch Dimming
-          LightDialButton(
-            isOn: light.isOn,
-            mode: light.mode,
-            brightness: light.brightness,
-            r: light.r,
-            g: light.g,
-            b: light.b,
-            isEnabled: true,
-            onToggle: () => ctrl.togglePower(),
-            onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
-            onBrightnessCommit: (val) => ctrl.commitBrightness(val),
-          ).animate().scale(begin: const Offset(0.92, 0.92), end: const Offset(1, 1), curve: Curves.elasticOut),
-
-          const SizedBox(height: 12),
-
-          // Quick-Snap Brightness Chips directly beneath the dial
-          _buildQuickBrightnessChips(light, ctrl),
-
-          const SizedBox(height: 16),
-
-          // Next-Gen Split-Tile Device Card (Tap body opens DeepControlSheet, drag scrubs, tap icon toggles power)
-          SplitTileCard(
-            name: activeDev?.displayName ?? conn.deviceName ?? 'Temple Lights',
-            roomLabel: '$roomLabel • Linked',
-            isOn: light.isOn,
-            brightness: light.brightness,
-            color: Color.fromARGB(255, light.r, light.g, light.b),
-            modeLabel: light.modeName,
-            onTogglePower: () => ctrl.togglePower(),
-            onOpenDetail: () => DeepControlSheet.show(context),
-            onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
-          ),
-
-          const SizedBox(height: 14),
-
-          // Mode Selector Cards
-          _buildModeSelector(light, ctrl, defaultModes, presets),
-
-          const SizedBox(height: 14),
-
-          // Dedicated Kelvin Warmth Slider (2000K to 6500K)
-          KelvinWarmthSlider(
-            initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
-            onChanged: (k, r, g, b) => ctrl.setLiveRgb(r, g, b),
-            onChangeEnd: (k, r, g, b) => ctrl.setRgb(r, g, b),
-          ),
-
-          const SizedBox(height: 14),
-
-          // Brightness Slider Card
-          _buildBrightnessCard(light, ctrl),
-
-          const SizedBox(height: 14),
-
-          // Interactive LED Strip Ruler & Range Selection Card
-          _buildStripRulerCard(context, light, ctrl),
-
-          const SizedBox(height: 14),
-
-          // Custom RGB Color Palette (always accessible)
-          _buildRgbPaletteCard(context, light, ctrl),
-          const SizedBox(height: 14),
-
-          // Quick Auto-Off Timer
-          const AutoOffTimerWidget(),
-        ],
-      );
+      connectionStatusLabel = '$roomName • Linked';
+    } else if (conn.isConnecting) {
+      connectionStatusLabel = '$roomName • Connecting';
+    } else if (conn.isReconnecting) {
+      connectionStatusLabel = '$roomName • Reconnecting';
+    } else if (conn.isScanning) {
+      connectionStatusLabel = '$roomName • Locating';
+    } else {
+      connectionStatusLabel = '$roomName • Standby';
     }
 
-    // 4. Disconnected / Idle
+    final String? dialSubtitle;
+    if (conn.isConnected) {
+      dialSubtitle = null;
+    } else if (conn.isConnecting) {
+      dialSubtitle = 'CONNECTING TO LIGHTS...';
+    } else if (conn.isReconnecting) {
+      dialSubtitle = 'RECONNECTING (ATTEMPT #${conn.reconnectAttempt})...';
+    } else if (conn.isScanning) {
+      dialSubtitle = 'LOCATING TEMPLE LIGHTS...';
+    } else if (conn.isDisconnected) {
+      dialSubtitle = 'TAP TO POWER ON & CONNECT';
+    } else {
+      dialSubtitle = 'STANDBY • TAP TO LINK';
+    }
+
     return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Container(
-          width: 100,
-          height: 100,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppTheme.surfaceRaised,
-            border: Border.all(color: AppTheme.amber.withValues(alpha: 0.35), width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.amber.withValues(alpha: 0.12),
-                blurRadius: 16,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Image.asset(
-                'assets/icons/temple_icon.png',
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
+        // Center Porcelain Power Dial
+        LightDialButton(
+          isOn: light.isOn,
+          mode: light.mode,
+          brightness: light.brightness,
+          r: light.r,
+          g: light.g,
+          b: light.b,
+          isEnabled: true,
+          subtitle: dialSubtitle,
+          onToggle: () async {
+            if (!conn.isConnected && !conn.isConnecting && !conn.isReconnecting && !conn.isScanning) {
+              unawaited(session.scanAndAutoConnect());
+            }
+            await ctrl.togglePower();
+          },
         ),
+
+        const SizedBox(height: 12),
+
+        // Quick-Snap Brightness Chips directly beneath the dial
+        _buildQuickBrightnessChips(light, ctrl),
+
         const SizedBox(height: 16),
-        Text(
-          conn.isTargetPaired ? 'TEMPLE LIGHTS DISCONNECTED' : 'NO LIGHTS CONNECTED',
-          style: AppTheme.heading(size: 15, color: AppTheme.textSecondary, letterSpacing: 1.5),
+
+        // Next-Gen Split-Tile Device Card (Tap body opens DeepControlSheet, drag scrubs, tap icon toggles power)
+        SplitTileCard(
+          name: activeDev?.displayName ?? conn.deviceName ?? 'Temple Lights',
+          roomLabel: connectionStatusLabel,
+          isOn: light.isOn,
+          brightness: light.brightness,
+          color: Color.fromARGB(255, light.r, light.g, light.b),
+          modeLabel: light.modeName,
+          onTogglePower: () async {
+            if (!conn.isConnected && !conn.isConnecting && !conn.isReconnecting && !conn.isScanning) {
+              unawaited(session.scanAndAutoConnect());
+            }
+            await ctrl.togglePower();
+          },
+          onOpenDetail: () => DeepControlSheet.show(context),
+          onBrightnessScrub: (val) => ctrl.setLiveBrightness(val),
         ),
-        const SizedBox(height: 6),
-        Text(
-          conn.errorMessage ?? 'Power on your light strip to establish link',
-          textAlign: TextAlign.center,
-          style: AppTheme.body(size: 12.5, color: AppTheme.textMuted),
+
+        const SizedBox(height: 14),
+
+        // Mode Selector Cards
+        _buildModeSelector(light, ctrl, defaultModes, presets),
+
+        const SizedBox(height: 14),
+
+        // Dedicated Kelvin Warmth Slider (2000K to 6500K)
+        KelvinWarmthSlider(
+          initialKelvin: rgbToClosestKelvin(light.r, light.g, light.b),
+          onChanged: (k, r, g, b) => ctrl.setLiveRgb(r, g, b),
+          onChangeEnd: (k, r, g, b) => ctrl.setRgb(r, g, b),
         ),
-        if (paired.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              '${paired.length} Paired device${paired.length != 1 ? "s" : ""} standing by for automatic GATT sync',
-              textAlign: TextAlign.center,
-              style: AppTheme.body(size: 11, color: AppTheme.amber),
-            ),
-          ),
-        ],
+
+        const SizedBox(height: 14),
+
+        // Brightness Slider Card
+        _buildBrightnessCard(light, ctrl),
+
+        const SizedBox(height: 14),
+
+        // Interactive LED Strip Ruler & Range Selection Card
+        _buildStripRulerCard(context, light, ctrl),
+
+        const SizedBox(height: 14),
+
+        // Custom RGB Color Palette (always accessible)
+        _buildRgbPaletteCard(context, light, ctrl),
+        const SizedBox(height: 14),
+
+        // Quick Auto-Off Timer
+        const AutoOffTimerWidget(),
       ],
-    ).animate().fadeIn(duration: 200.ms);
+    );
   }
 
   Widget _buildRoomChip({
@@ -1479,7 +1488,7 @@ class LightsScreen extends ConsumerWidget {
                     label: 'GREEN',
                     value: curG,
                     activeColor: Colors.greenAccent,
-                    onChanged: (v) => curR = v,
+                    onChanged: (v) => curG = v,
                   ),
                   buildColorSlider(
                     label: 'BLUE',

@@ -627,6 +627,11 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
                       id: deviceId,
                       rainmakerNodeId: nodeId,
                     );
+                // Zero-tap auto-binding if authenticated with Espressif Cloud
+                final auth = _ref.read(rainmakerAuthProvider);
+                if (auth.isLoggedIn && !auth.nodes.contains(nodeId)) {
+                  unawaited(_ref.read(rainmakerAuthProvider.notifier).mapActiveDevice(nodeId: nodeId));
+                }
               }
             } else if (type == 'ota_ack') {
               _ref.read(otaProgressProvider.notifier).handleOtaAck(json);
@@ -687,6 +692,7 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
     );
 
     _startPeriodicTimeSync();
+    unawaited(_ref.read(lightControlProvider.notifier).onDeviceConnected());
     unawaited(_ref.read(schedulesProvider.notifier).onDeviceConnected());
     unawaited(_ref.read(defaultModesProvider.notifier).onDeviceConnected());
     unawaited(_ref.read(presetsProvider.notifier).onDeviceConnected());
@@ -697,6 +703,12 @@ class LightSessionNotifier extends StateNotifier<ConnState> {
     try {
       await _client.writeWithoutResponse(
         LightPacketEncoder.encodeGetState(),
+        serviceUuid: settings.customServiceUuid,
+        charUuid: settings.customCharUuid,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _client.writeWithoutResponse(
+        LightPacketEncoder.encodeGetRmakerInfo(),
         serviceUuid: settings.customServiceUuid,
         charUuid: settings.customCharUuid,
       );
@@ -859,7 +871,9 @@ final motorSessionProvider = lightSessionProvider;
 // ============================================================================
 
 class LightControlNotifier extends StateNotifier<LightState> {
-  LightControlNotifier(this._ref) : super(LightState.idle);
+  LightControlNotifier(this._ref) : super(LightState.idle) {
+    _initFromCached();
+  }
 
   final Ref _ref;
   BleClient get _client => _ref.read(bleClientProvider);
@@ -868,10 +882,69 @@ class LightControlNotifier extends StateNotifier<LightState> {
   Timer? _throttleTimer;
   int? _pendingBrightness;
   bool _sendInFlight = false;
+  bool? _pendingPowerCommand;
 
   ({int r, int g, int b})? _pendingRgb;
   Timer? _rgbThrottleTimer;
   bool _rgbSendInFlight = false;
+
+  void _initFromCached() {
+    try {
+      final kv = _ref.read(kvStoreProvider);
+      final pairedList = _ref.read(pairedDevicesProvider);
+      final lastId = kv.getString(KvKeys.lastConnectedId);
+      final active = pairedList.where((d) => d.id == lastId).firstOrNull ?? pairedList.firstOrNull;
+      if (active != null) {
+        hydrateFromCached(active);
+      }
+    } catch (_) {
+      // In isolated unit tests where kvStoreProvider is not overridden
+    }
+  }
+
+  void _updateCachedDeviceState({
+    bool? isOn,
+    int? brightness,
+    int? mode,
+    int? r,
+    int? g,
+    int? b,
+  }) {
+    try {
+      String? targetId = _ref.read(bleClientProvider).deviceId;
+      if (targetId == null) {
+        try {
+          targetId = _ref.read(lightSessionProvider).deviceId;
+        } catch (_) {}
+      }
+      if (targetId == null) {
+        try {
+          targetId = _ref.read(pairedDevicesProvider).firstOrNull?.id;
+        } catch (_) {}
+      }
+      if (targetId != null) {
+        unawaited(_ref.read(pairedDevicesProvider.notifier).updateCachedState(
+              id: targetId,
+              isOn: isOn,
+              brightness: brightness,
+              mode: mode,
+              r: r,
+              g: g,
+              b: b,
+            ));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> onDeviceConnected() async {
+    if (_pendingPowerCommand != null) {
+      final on = _pendingPowerCommand!;
+      _pendingPowerCommand = null;
+      _lastLocalInteraction = DateTime.now();
+      _log.i('Dispatched queued power command ($on) after BLE link established');
+      await setPower(on);
+    }
+  }
 
   void startBrightnessDrag() {
     _lastLocalInteraction = DateTime.now();
@@ -1001,6 +1074,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
     await _dispatchFast(LightPacketEncoder.encodeFastBrightness(b));
     // Also dispatch JSON as standard fallback
     await _dispatchPacket(LightPacketEncoder.encodeSetBrightness(b));
+    _updateCachedDeviceState(isOn: b > 0, brightness: b);
   }
 
   /// Backward-compatible alias
@@ -1014,20 +1088,34 @@ class LightControlNotifier extends StateNotifier<LightState> {
 
   Future<void> setPower(bool on) async {
     _lastLocalInteraction = DateTime.now();
+    final client = _ref.read(bleClientProvider);
+
     if (on) {
       // Switching ON: remember last state, advance to next mode and loop among 0, 1, 2
       final nextMode = state.mode >= 2 ? 0 : state.mode + 1;
       const targetBright = 255;
       state = state.copyWith(mode: nextMode, isOn: true, brightness: targetBright, lastToggled: DateTime.now());
       await AppHaptics.powerUp();
-      await _dispatchPacket(LightPacketEncoder.encodeOn());
+      if (client.isConnected) {
+        _pendingPowerCommand = null;
+        await _dispatchPacket(LightPacketEncoder.encodeOn());
+      } else {
+        _pendingPowerCommand = true;
+      }
     } else {
       state = state.copyWith(isOn: false, brightness: 0, lastToggled: DateTime.now());
       _ref.read(autoOffTimerProvider.notifier).onLightsSwitchedOff();
       await AppHaptics.toggle(false);
-      await _dispatchFast(LightPacketEncoder.encodeFastBrightness(0));
-      await _dispatchPacket(LightPacketEncoder.encodeOff());
+      if (client.isConnected) {
+        _pendingPowerCommand = null;
+        await _dispatchFast(LightPacketEncoder.encodeFastBrightness(0));
+        await _dispatchPacket(LightPacketEncoder.encodeOff());
+      } else {
+        _pendingPowerCommand = false;
+      }
     }
+
+    _updateCachedDeviceState(isOn: on, brightness: on ? 255 : 0);
   }
 
   /// Switch mode (0=warm all, 1=warm center, 2=white all, 3=custom rgb)
@@ -1043,6 +1131,7 @@ class LightControlNotifier extends StateNotifier<LightState> {
     );
     await AppHaptics.selection();
     await _dispatchPacket(LightPacketEncoder.encodeSetMode(mode));
+    _updateCachedDeviceState(isOn: true, mode: mode);
   }
 
   /// Activate modern dynamic preset (with segments & animations)
@@ -1141,13 +1230,14 @@ class LightControlNotifier extends StateNotifier<LightState> {
     int? activeSegmentCount,
     String? rainmakerNodeId,
   }) {
-    // If the user recently changed brightness/mode locally (within last 1500ms),
+    // If the user recently changed brightness locally (within last 1500ms) or has a pending power command,
     // ignore stale incoming hardware echo to prevent slider jitter or jumping
     final isRecentLocal = _lastLocalInteraction != null &&
         DateTime.now().difference(_lastLocalInteraction!).inMilliseconds < 1500;
+    final hasPendingPower = _pendingPowerCommand != null;
 
-    final targetBright = isRecentLocal ? state.brightness : brightness;
-    final isOn = targetBright > 0;
+    final targetBright = (hasPendingPower || isRecentLocal) ? state.brightness : brightness;
+    final isOn = hasPendingPower ? state.isOn : (isRecentLocal ? state.isOn : (targetBright > 0));
 
     state = state.copyWith(
       mode: mode,
@@ -2983,10 +3073,10 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
     final refresh = kv.getString(KvKeys.rainmakerRefreshToken);
     final uid = kv.getString(KvKeys.rainmakerUserId);
 
-    if (email != null && token != null && token.isNotEmpty) {
+    if (token != null && token.isNotEmpty) {
       state = RainmakerAuthState(
         isLoggedIn: true,
-        email: email,
+        email: email ?? 'Google User',
         accessToken: token,
         refreshToken: refresh,
         userId: uid,
@@ -3015,55 +3105,76 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
         return false;
       }
 
-      final service = _ref.read(rainmakerCloudServiceProvider);
-      final res = await service.exchangeOAuthCode(code);
-
-      if (res.isSuccess && res.accessToken != null) {
-        final kv = _ref.read(kvStoreProvider);
-        if (res.email != null) {
-          await kv.putString(KvKeys.rainmakerEmail, res.email!);
-        }
-        await kv.putString(KvKeys.rainmakerAccessToken, res.accessToken!);
-        if (res.refreshToken != null) {
-          await kv.putString(KvKeys.rainmakerRefreshToken, res.refreshToken!);
-        }
-        if (res.userId != null) {
-          await kv.putString(KvKeys.rainmakerUserId, res.userId!);
-        }
-
-        state = RainmakerAuthState(
-          isLoggedIn: true,
-          email: res.email,
-          accessToken: res.accessToken,
-          refreshToken: res.refreshToken,
-          userId: res.userId,
-          isLoading: false,
-        );
-
-        await refreshNodes();
-
-        // Zero-tap Auto-Binding: If an active light is connected with a known nodeId, bind it automatically!
-        final activeDev = _ref.read(activeDeviceProvider);
-        final light = _ref.read(lightControlProvider);
-        final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
-        if (targetNodeId != null && targetNodeId.isNotEmpty) {
-          await mapActiveDevice(nodeId: targetNodeId);
-        }
-
-        return true;
-      } else {
-        state = state.copyWith(
-          isLoading: false,
-          errorMessage: res.errorMessage ?? 'Failed to complete Google authentication.',
-        );
-        return false;
-      }
+      return await _completeOAuthCodeExchange(code);
     } catch (e) {
-      _log.w('Google OAuth sign-in canceled or failed: $e');
-      final isCanceled = e.toString().toLowerCase().contains('cancel');
+      _log.w('Google OAuth sign-in error or cancelled: $e');
+      final errStr = e.toString().toLowerCase();
+      final isCanceled = errStr.contains('cancel') || errStr.contains('user_canceled');
       state = state.copyWith(
         isLoading: false,
-        errorMessage: isCanceled ? null : 'Google sign-in was interrupted.',
+        errorMessage: isCanceled
+            ? 'Sign-in canceled or closed in browser.'
+            : 'Google sign-in failed: $e',
+      );
+      return false;
+    }
+  }
+
+  /// Fallback: Exchanges an OAuth code directly, whether entered as raw code or full callback URL.
+  Future<bool> loginWithOAuthCode(String codeOrUrl) async {
+    state = state.copyWith(isLoading: true, errorMessage: null);
+    final code = RainmakerCloudService.extractOAuthCode(codeOrUrl);
+    if (code.isEmpty) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: 'Invalid or empty code / redirect URL.',
+      );
+      return false;
+    }
+    return await _completeOAuthCodeExchange(code);
+  }
+
+  Future<bool> _completeOAuthCodeExchange(String code) async {
+    final service = _ref.read(rainmakerCloudServiceProvider);
+    final res = await service.exchangeOAuthCode(code);
+
+    if (res.isSuccess && res.accessToken != null) {
+      final kv = _ref.read(kvStoreProvider);
+      if (res.email != null) {
+        await kv.putString(KvKeys.rainmakerEmail, res.email!);
+      }
+      await kv.putString(KvKeys.rainmakerAccessToken, res.accessToken!);
+      if (res.refreshToken != null) {
+        await kv.putString(KvKeys.rainmakerRefreshToken, res.refreshToken!);
+      }
+      if (res.userId != null) {
+        await kv.putString(KvKeys.rainmakerUserId, res.userId!);
+      }
+
+      state = RainmakerAuthState(
+        isLoggedIn: true,
+        email: res.email ?? 'Google User',
+        accessToken: res.accessToken,
+        refreshToken: res.refreshToken,
+        userId: res.userId,
+        isLoading: false,
+      );
+
+      await refreshNodes();
+
+      // Zero-tap Auto-Binding: If an active light is connected with a known nodeId, bind it automatically!
+      final activeDev = _ref.read(activeDeviceProvider);
+      final light = _ref.read(lightControlProvider);
+      final targetNodeId = light.rainmakerNodeId ?? activeDev?.rainmakerNodeId;
+      if (targetNodeId != null && targetNodeId.isNotEmpty) {
+        await mapActiveDevice(nodeId: targetNodeId);
+      }
+
+      return true;
+    } else {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: res.errorMessage ?? 'Failed to complete Google authentication.',
       );
       return false;
     }
@@ -3126,23 +3237,83 @@ class RainmakerAuthNotifier extends StateNotifier<RainmakerAuthState> {
     final token = state.accessToken;
     if (token == null || token.isEmpty) return;
     final service = _ref.read(rainmakerCloudServiceProvider);
-    final nodes = await service.getUserNodes(accessToken: token);
+    var nodes = await service.getUserNodes(accessToken: token);
+
+    // If fetch failed or returned empty and we have a refreshToken, try silent refresh once
+    if (nodes.isEmpty && state.refreshToken != null && state.refreshToken!.isNotEmpty) {
+      final refreshed = await service.refreshAccessToken(state.refreshToken!);
+      if (refreshed.isSuccess && refreshed.accessToken != null) {
+        final kv = _ref.read(kvStoreProvider);
+        await kv.putString(KvKeys.rainmakerAccessToken, refreshed.accessToken!);
+        state = state.copyWith(accessToken: refreshed.accessToken);
+        nodes = await service.getUserNodes(accessToken: refreshed.accessToken!);
+      }
+    }
     state = state.copyWith(nodes: nodes);
   }
 
   Future<bool> mapActiveDevice({required String nodeId, String? secretKey}) async {
-    final token = state.accessToken;
+    var token = state.accessToken;
     if (token == null || token.isEmpty) {
       state = state.copyWith(errorMessage: 'Please log in to your Espressif account first.');
       return false;
     }
+    final uid = state.userId;
+    if (uid == null || uid.isEmpty) {
+      state = state.copyWith(errorMessage: 'User ID is missing. Please sign in again.');
+      return false;
+    }
+
     state = state.copyWith(isLoading: true, errorMessage: null);
     final service = _ref.read(rainmakerCloudServiceProvider);
-    final success = await service.mapNodeToUser(
+    final actualSecretKey = (secretKey != null && secretKey.trim().isNotEmpty)
+        ? secretKey.trim()
+        : RainmakerCloudService.generateSecretKey();
+
+    // 1. Send rmaker_map_user over BLE to ESP32 node if connected
+    final bleClient = _ref.read(bleClientProvider);
+    if (bleClient.isConnected) {
+      final settings = _ref.read(settingsProvider);
+      final pkt = LightPacketEncoder.encodeRmakerMapUser(
+        userId: uid,
+        secretKey: actualSecretKey,
+      );
+      try {
+        await bleClient.writeWithoutResponse(
+          pkt,
+          serviceUuid: settings.customServiceUuid,
+          charUuid: settings.customCharUuid,
+        );
+        _log.i('Dispatched rmaker_map_user BLE packet to node (uid: $uid)');
+        // Give ESP32 a brief window to push MQTT user mapping packet to AWS IoT
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      } catch (e) {
+        _log.w('Failed to write rmaker_map_user over BLE: $e');
+      }
+    }
+
+    // 2. Call RainMaker Cloud PUT /v1/user/nodes/mapping with matching secret key
+    var success = await service.mapNodeToUser(
       accessToken: token,
       nodeId: nodeId,
-      secretKey: secretKey,
+      secretKey: actualSecretKey,
     );
+
+    // If failed and refreshToken exists, try refreshing token once and retrying
+    if (!success && state.refreshToken != null && state.refreshToken!.isNotEmpty) {
+      final refreshed = await service.refreshAccessToken(state.refreshToken!);
+      if (refreshed.isSuccess && refreshed.accessToken != null) {
+        token = refreshed.accessToken!;
+        final kv = _ref.read(kvStoreProvider);
+        await kv.putString(KvKeys.rainmakerAccessToken, token);
+        state = state.copyWith(accessToken: token);
+        success = await service.mapNodeToUser(
+          accessToken: token,
+          nodeId: nodeId,
+          secretKey: actualSecretKey,
+        );
+      }
+    }
 
     state = state.copyWith(isLoading: false);
     if (success) {

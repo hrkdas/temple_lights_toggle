@@ -33,6 +33,8 @@ class ConnState {
   bool get isConnecting => phase == ConnPhase.connecting;
   bool get isReconnecting => phase == ConnPhase.reconnecting;
   bool get isScanning => phase == ConnPhase.scanning;
+  bool get isDisconnected => phase == ConnPhase.disconnected || phase == ConnPhase.idle || phase == ConnPhase.failed;
+  bool get isIdle => phase == ConnPhase.idle;
 
   int get signalStrengthPercent {
     if (rssi == null) return isConnected ? 70 : 0;
@@ -50,6 +52,14 @@ class ConnState {
     if (r >= -72) return 'Good (Moderate)';
     if (r >= -84) return 'Fair (Distant)';
     return 'Weak (Far Range)';
+  }
+
+  Color get signalColor {
+    if (!isConnected) return const Color(0xFF8C867D);
+    final r = rssi ?? -70;
+    if (r >= -72) return const Color(0xFF059669);
+    if (r >= -85) return const Color(0xFFD97706);
+    return const Color(0xFFDC2626);
   }
 
   ConnState copyWith({
@@ -354,7 +364,7 @@ class OtaProgressState {
     this.statusMessage = 'Ready',
     this.errorMessage,
     this.deviceFirmwareVersion,
-    this.bundledFirmwareVersion = '1.2.0',
+    this.bundledFirmwareVersion = '1.3.1',
     this.isCompleted = false,
   });
 

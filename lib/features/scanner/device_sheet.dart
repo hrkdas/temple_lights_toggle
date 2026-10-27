@@ -356,6 +356,13 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                             final isConnecting = _connectingId == p.id || (connState.isConnecting && connState.deviceId == p.id);
                             final room = rooms.where((r) => r.id == p.effectiveRoomId).firstOrNull;
 
+                            Color rssiColor(int? r) {
+                              if (r == null) return AppTheme.textMuted;
+                              if (r >= -72) return AppTheme.green;
+                              if (r >= -85) return AppTheme.amber;
+                              return AppTheme.red;
+                            }
+
                             return Container(
                               margin: const EdgeInsets.only(bottom: 10),
                               decoration: BoxDecoration(
@@ -370,99 +377,114 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                   width: 1.2,
                                 ),
                               ),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                                leading: Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surface,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: AppTheme.border),
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(9),
-                                    child: Image.asset(
-                                      'assets/icons/temple_icon.png',
-                                      width: 44,
-                                      height: 44,
-                                      fit: BoxFit.cover,
-                                    ),
-                                  ),
-                                ),
-                                title: Column(
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
+                                    // Row 1: Icon + Name (Full Width) + Status Badges
                                     Row(
                                       children: [
-                                        Expanded(
-                                          child: Text(
-                                            p.displayName,
-                                            style: AppTheme.heading(size: 15),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
+                                        Container(
+                                          width: 38,
+                                          height: 38,
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.surface,
+                                            borderRadius: BorderRadius.circular(9),
+                                            border: Border.all(color: AppTheme.border),
+                                          ),
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: Image.asset(
+                                              'assets/icons/temple_icon.png',
+                                              width: 38,
+                                              height: 38,
+                                              fit: BoxFit.cover,
+                                            ),
                                           ),
                                         ),
-                                        if (isCurrentlyConnected)
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                p.displayName,
+                                                style: AppTheme.heading(size: 15),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                p.customAlias != null && p.customAlias!.isNotEmpty && p.customAlias != p.name
+                                                    ? '${p.name} • ${p.effectiveLedCount} LEDs (${p.formattedLength})'
+                                                    : '${p.effectiveLedCount} LEDs (${p.formattedLength})',
+                                                style: AppTheme.body(size: 11, color: AppTheme.textMuted),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (isCurrentlyConnected) ...[
+                                          const SizedBox(width: 6),
                                           Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                                             decoration: BoxDecoration(
                                               color: AppTheme.green.withValues(alpha: 0.15),
-                                              borderRadius: BorderRadius.circular(4),
+                                              borderRadius: BorderRadius.circular(5),
+                                              border: Border.all(color: AppTheme.green.withValues(alpha: 0.4)),
                                             ),
                                             child: Text(
                                               'ACTIVE',
-                                              style: AppTheme.heading(size: 9, color: AppTheme.green),
+                                              style: AppTheme.heading(size: 9.5, color: AppTheme.green),
                                             ),
-                                          )
-                                        else if (isLastConnected)
+                                          ),
+                                        ] else if (isLastConnected) ...[
+                                          const SizedBox(width: 6),
                                           Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                                             decoration: BoxDecoration(
                                               color: AppTheme.cyan.withValues(alpha: 0.15),
-                                              borderRadius: BorderRadius.circular(4),
+                                              borderRadius: BorderRadius.circular(5),
+                                              border: Border.all(color: AppTheme.cyan.withValues(alpha: 0.4)),
                                             ),
                                             child: Text(
                                               'AUTO-TARGET',
-                                              style: AppTheme.heading(size: 9, color: AppTheme.cyan),
+                                              style: AppTheme.heading(size: 9.5, color: AppTheme.cyan),
                                             ),
                                           ),
+                                        ],
                                         if (p.firmwareVersion != null && p.firmwareVersion != LightBleUuids.bundledFirmwareVersion) ...[
-                                          const SizedBox(width: 4),
+                                          const SizedBox(width: 5),
                                           Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                                             decoration: BoxDecoration(
                                               color: AppTheme.amber.withValues(alpha: 0.2),
-                                              borderRadius: BorderRadius.circular(4),
+                                              borderRadius: BorderRadius.circular(5),
                                               border: Border.all(color: AppTheme.amber.withValues(alpha: 0.4)),
                                             ),
                                             child: Text(
                                               'UPDATE',
-                                              style: AppTheme.heading(size: 8, color: AppTheme.amber),
+                                              style: AppTheme.heading(size: 8.5, color: AppTheme.amber),
                                             ),
                                           ),
                                         ],
                                       ],
                                     ),
-                                    Wrap(
-                                      crossAxisAlignment: WrapCrossAlignment.center,
-                                      spacing: 6,
+                                    const SizedBox(height: 10),
+                                    Divider(height: 1, thickness: 0.8, color: AppTheme.border.withValues(alpha: 0.6)),
+                                    const SizedBox(height: 8),
+
+                                    // Row 2: Room Chip + Live Signal + Action Controls
+                                    Row(
                                       children: [
-                                        if (p.customAlias != null && p.customAlias!.isNotEmpty && p.customAlias != p.name)
-                                          Text(
-                                            '${p.name} • ${p.effectiveLedCount} LEDs (${p.formattedLength})',
-                                            style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
-                                          )
-                                        else
-                                          Text(
-                                            '${p.effectiveLedCount} LEDs (${p.formattedLength})',
-                                            style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
-                                          ),
+                                        // Room Assignment Pill
                                         InkWell(
                                           onTap: () => _showRoomAssignmentDialog(context, p),
                                           borderRadius: BorderRadius.circular(6),
                                           child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                                             decoration: BoxDecoration(
                                               color: AppTheme.surface,
                                               borderRadius: BorderRadius.circular(6),
@@ -471,116 +493,121 @@ class _DevicePickerSheetState extends ConsumerState<DevicePickerSheet> {
                                             child: Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                Text(room?.iconEmoji ?? '🛕', style: const TextStyle(fontSize: 9.5)),
+                                                Text(room?.iconEmoji ?? '🛕', style: const TextStyle(fontSize: 10.5)),
                                                 const SizedBox(width: 4),
-                                                Text(room?.name ?? 'Puja Mandir', style: AppTheme.heading(size: 9.5, color: AppTheme.amber)),
+                                                Text(room?.name ?? 'Puja Mandir', style: AppTheme.heading(size: 10, color: AppTheme.amber)),
                                                 const SizedBox(width: 2),
-                                                const Icon(Icons.arrow_drop_down, size: 12, color: AppTheme.textMuted),
+                                                const Icon(Icons.arrow_drop_down, size: 14, color: AppTheme.textMuted),
                                               ],
                                             ),
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                subtitle: Padding(
-                                  padding: const EdgeInsets.only(top: 4),
-                                  child: Row(
-                                    children: [
-                                      if (isCurrentlyConnected && connState.rssi != null) ...[
-                                        SignalBars(rssi: connState.rssi!, color: AppTheme.green),
                                         const SizedBox(width: 8),
-                                        Text(
-                                          '${connState.rssi} dBm • Connected',
-                                          style: AppTheme.body(size: 11, color: AppTheme.green),
-                                        ),
-                                      ] else if (scannedDev != null) ...[
-                                        SignalBars(rssi: scannedDev.rssi),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          '${scannedDev.rssi} dBm • In Range',
-                                          style: AppTheme.body(size: 11, color: AppTheme.textSecondary),
-                                        ),
-                                      ] else ...[
-                                        const Icon(Icons.portable_wifi_off_rounded, size: 14, color: AppTheme.textMuted),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Offline / Standby',
-                                          style: AppTheme.body(size: 11, color: AppTheme.textMuted),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (isCurrentlyConnected) ...[
-                                      IconButton(
-                                        icon: const Icon(Icons.lightbulb_outline_rounded, color: AppTheme.amber, size: 20),
-                                        tooltip: 'Blink to Identify',
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                        onPressed: () async {
-                                          await ref.read(lightControlProvider.notifier).identifyDevice();
-                                          if (context.mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('Blinking "${p.displayName}" 3 times to identify...'),
-                                                duration: const Duration(seconds: 2),
-                                                behavior: SnackBarBehavior.floating,
-                                              ),
-                                            );
-                                          }
-                                        },
-                                      ),
-                                    ],
-                                    IconButton(
-                                      icon: const Icon(Icons.drive_file_rename_outline_rounded, color: AppTheme.textSecondary, size: 18),
-                                      tooltip: 'Rename',
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                      onPressed: () => _showRenameDialog(context, p),
-                                    ),
-                                    if (isConnecting)
-                                      const SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2.5,
-                                          valueColor: AlwaysStoppedAnimation(AppTheme.cyan),
-                                        ),
-                                      )
-                                    else if (!isCurrentlyConnected)
-                                      ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: AppTheme.amber,
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                                          minimumSize: const Size(54, 30),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(8),
+
+                                        // Signal Strength with verified color calibration
+                                        if (isCurrentlyConnected && connState.rssi != null) ...[
+                                          SignalBars(rssi: connState.rssi!, color: rssiColor(connState.rssi)),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${connState.rssi} dBm',
+                                            style: AppTheme.body(size: 10.5, color: rssiColor(connState.rssi)),
                                           ),
+                                        ] else if (scannedDev != null) ...[
+                                          SignalBars(rssi: scannedDev.rssi, color: rssiColor(scannedDev.rssi)),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${scannedDev.rssi} dBm',
+                                            style: AppTheme.body(size: 10.5, color: AppTheme.textSecondary),
+                                          ),
+                                        ] else ...[
+                                          const Icon(Icons.portable_wifi_off_rounded, size: 13, color: AppTheme.textMuted),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            'Standby',
+                                            style: AppTheme.body(size: 10.5, color: AppTheme.textMuted),
+                                          ),
+                                        ],
+
+                                        const Spacer(),
+
+                                        // Action Icons / Buttons
+                                        if (isCurrentlyConnected) ...[
+                                          IconButton(
+                                            icon: const Icon(Icons.lightbulb_outline_rounded, color: AppTheme.amber, size: 19),
+                                            tooltip: 'Blink to Identify',
+                                            padding: const EdgeInsets.all(6),
+                                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                            onPressed: () async {
+                                              await ref.read(lightControlProvider.notifier).identifyDevice();
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  SnackBar(
+                                                    content: Text('Blinking "${p.displayName}" 3 times to identify...'),
+                                                    duration: const Duration(seconds: 2),
+                                                    behavior: SnackBarBehavior.floating,
+                                                  ),
+                                                );
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                        IconButton(
+                                          icon: const Icon(Icons.drive_file_rename_outline_rounded, color: AppTheme.textSecondary, size: 18),
+                                          tooltip: 'Rename',
+                                          padding: const EdgeInsets.all(6),
+                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                          onPressed: () => _showRenameDialog(context, p),
                                         ),
-                                        onPressed: _connectingId == null ? () => _switchTo(p.id, p.displayName) : null,
-                                        child: Text(
-                                          'Switch',
-                                          style: AppTheme.heading(size: 11, color: Colors.white),
+                                        if (isConnecting)
+                                          const SizedBox(
+                                            width: 24,
+                                            height: 24,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2.2,
+                                              valueColor: AlwaysStoppedAnimation(AppTheme.cyan),
+                                            ),
+                                          )
+                                        else if (!isCurrentlyConnected)
+                                          ElevatedButton(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: AppTheme.amber,
+                                              foregroundColor: Colors.white,
+                                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                                              minimumSize: const Size(54, 30),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(8),
+                                              ),
+                                            ),
+                                            onPressed: _connectingId == null ? () => _switchTo(p.id, p.displayName) : null,
+                                            child: Text(
+                                              'Switch',
+                                              style: AppTheme.heading(size: 11, color: Colors.white),
+                                            ),
+                                          )
+                                        else
+                                          IconButton(
+                                            icon: const Icon(Icons.link_off_rounded, color: AppTheme.red, size: 19),
+                                            tooltip: 'Disconnect',
+                                            padding: const EdgeInsets.all(6),
+                                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                            onPressed: () async {
+                                              await ref.read(lightSessionProvider.notifier).disconnect();
+                                            },
+                                          ),
+                                        const SizedBox(width: 2),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.textMuted, size: 18),
+                                          tooltip: 'Unpair',
+                                          padding: const EdgeInsets.all(6),
+                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                          onPressed: () async {
+                                            if (isCurrentlyConnected) {
+                                              await ref.read(lightSessionProvider.notifier).disconnect();
+                                            }
+                                            await ref.read(pairedDevicesProvider.notifier).remove(p.id);
+                                          },
                                         ),
-                                      ),
-                                    const SizedBox(width: 2),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.textMuted, size: 18),
-                                      tooltip: 'Unpair',
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                                      onPressed: () async {
-                                        await ref.read(pairedDevicesProvider.notifier).remove(p.id);
-                                        if (isCurrentlyConnected) {
-                                          await ref.read(lightSessionProvider.notifier).disconnect();
-                                        }
-                                      },
+                                      ],
                                     ),
                                   ],
                                 ),

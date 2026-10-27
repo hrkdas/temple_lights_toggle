@@ -29,7 +29,7 @@ class LightBleUuids {
     legacyService,
   ];
   static const String targetDeviceName = 'Temple Lights';
-  static const String bundledFirmwareVersion = '1.3.0';
+  static const String bundledFirmwareVersion = '1.3.1';
 
   static bool isTargetDevice({
     required String name,
@@ -274,6 +274,16 @@ class LightPacketEncoder {
 
   static Uint8List encodeGetRmakerInfo() =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'get_rmaker_info'})));
+
+  static Uint8List encodeRmakerMapUser({
+    required String userId,
+    required String secretKey,
+  }) =>
+      Uint8List.fromList(utf8.encode(jsonEncode({
+        'cmd': 'rmaker_map_user',
+        'user_id': userId,
+        'secret_key': secretKey,
+      })));
 
   static Uint8List encodeSetPreset(int index) =>
       Uint8List.fromList(utf8.encode(jsonEncode({'cmd': 'set_preset', 'idx': index})));
